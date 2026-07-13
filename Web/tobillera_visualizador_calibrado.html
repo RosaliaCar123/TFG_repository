@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tobillera TFG</title>
+<style>
+  /* ── Tokens ── */
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --border:   #2a2d3a;
+    --accent:   #00d4a0;
+    --accent2:  #5b8fff;
+    --warn:     #ff6b6b;
+    --text:     #e8eaf0;
+    --muted:    #6b7080;
+    --mono:     'JetBrains Mono', 'Fira Mono', monospace;
+    --sans:     'Inter', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    width: 40px; height: 40px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+  h1 span { color: var(--accent); }
+
+  #estado-ble {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .dot.conectado { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .dot.grabando  { background: var(--warn);   box-shadow: 0 0 6px var(--warn); animation: pulso 1s infinite; }
+
+  @keyframes pulso { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Controles ── */
+  .controles {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+
+  button {
+    padding: 9px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; gap: 7px;
+  }
+
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0f1117;
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { background: #00f0b8; color: #0f1117; }
+
+  button.danger { border-color: var(--warn); color: var(--warn); }
+  button.danger:hover:not(:disabled) { background: var(--warn); color: #fff; }
+
+  /* ── Stats rápidas ── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .stat-val   { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); }
+  .stat-unit  { font-size: 11px; color: var(--muted); margin-left: 3px; }
+
+  /* ── Log ── */
+  #log {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    height: 80px;
+    overflow-y: auto;
+    margin-bottom: 24px;
+  }
+
+  #log .ok   { color: var(--accent); }
+  #log .err  { color: var(--warn); }
+  #log .info { color: var(--accent2); }
+
+  /* ── Tabs pisadas ── */
+  #tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .tab {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab:hover  { border-color: var(--accent2); color: var(--accent2); }
+  .tab.active { background: var(--accent2); border-color: var(--accent2); color: #fff; font-weight: 600; }
+
+  /* ── Tabla de datos ── */
+  #tabla-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .tabla-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .tabla-header h2 { font-size: 14px; font-weight: 600; }
+  .duracion-badge {
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2px 10px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  thead th {
+    background: var(--bg);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  /* columnas de grupo */
+  thead tr:first-child th {
+    text-align: center;
+    border-bottom: none;
+    padding: 6px 12px 2px;
+    font-size: 10px;
+  }
+
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+
+  td { padding: 8px 12px; color: var(--text); white-space: nowrap; }
+
+  .pct-cell {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 13px;
+  }
+
+  .t-cell { color: var(--muted); }
+
+  .val-pos { color: #7dd3fc; }
+  .val-neg { color: #f9a8d4; }
+
+  /* grupos de columnas */
+  .sep { border-left: 1px solid var(--border) !important; }
+
+  /* ── Empty state ── */
+  #empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--muted);
+  }
+  #empty .big { font-size: 40px; margin-bottom: 12px; }
+  #empty p { font-size: 13px; line-height: 1.6; }
+
+  /* ── Exportar ── */
+  #btn-export { margin-top: 16px; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🦶</div>
+  <div>
+    <h1>Tobillera <span>TFG</span></h1>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px">Visualizador Web Bluetooth</div>
+  </div>
+  <div id="estado-ble">
+    <div class="dot" id="dot"></div>
+    <span id="estado-txt">Sin conectar</span>
+  </div>
+</header>
+
+<div class="controles">
+  <button class="primary" id="btn-conectar">⚡ Conectar BLE</button>
+  <button id="btn-iniciar"  disabled>▶ Iniciar sesión</button>
+  <button id="btn-terminar" class="danger" disabled>⏹ Terminar y recibir</button>
+  <button id="btn-export"   disabled>↓ Exportar CSV</button>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Pisadas</div>
+    <div><span class="stat-val" id="s-pisadas">0</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Última duración</div>
+    <div><span class="stat-val" id="s-duracion">—</span><span class="stat-unit">ms</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Estado</div>
+    <div><span class="stat-val" id="s-estado" style="font-size:14px;color:var(--muted)">Esperando</span></div>
+  </div>
+</div>
+
+<div id="log"><span class="info">▸ Abre Chrome, conecta el dispositivo y pulsa "Conectar BLE"</span></div>
+
+<!-- Panel de calibración -->
+<div id="cal-panel" style="display:none; background:var(--color-background-secondary,#1a1d27); border:1px solid var(--border); border-radius:10px; padding:14px 18px; margin-bottom:16px;">
+  <h3 style="font-size:13px; font-weight:600; color:var(--accent); margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+    🎯 Posición neutra calibrada
+  </h3>
+  <table style="width:100%; font-family:var(--mono); font-size:12px;">
+    <thead>
+      <tr style="color:var(--muted); border-bottom:1px solid var(--border);">
+        <th style="text-align:left; padding:6px 8px;">Sensor</th>
+        <th style="text-align:right; padding:6px 8px;">Roll (°)</th>
+        <th style="text-align:right; padding:6px 8px;">Pitch (°)</th>
+        <th style="text-align:right; padding:6px 8px;">Yaw (°)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding:6px 8px; color:var(--accent);">Astrágalo</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-roll-ast">—</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-pitch-ast">—</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-yaw-ast">—</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 8px; color:#fbbf24;">Metatarsiano</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-roll-meta">—</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-pitch-meta">—</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-yaw-meta">—</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div id="tabs"></div>
+
+<div id="tabla-wrap">
+  <div id="empty">
+    <div class="big">📡</div>
+    <p>Conecta la tobillera por BLE,<br>inicia la sesión y recibe los datos.</p>
+  </div>
+  <div id="tabla-contenido" style="display:none">
+    <div class="tabla-header">
+      <h2 id="tabla-titulo">Pisada 1</h2>
+      <span class="duracion-badge" id="tabla-duracion">— ms</span>
+    </div>
+    <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">%</th>
+          <th rowspan="2" class="sep">t (ms)</th>
+          <th colspan="3" class="sep" style="color:var(--accent)">Astrágalo — Velocidad (m/s)</th>
+          <th colspan="3" class="sep" style="color:var(--accent2)">Astrágalo — Ángulo (°)</th>
+          <th colspan="3" class="sep" style="color:#fbbf24">Metatarsiano — Velocidad (m/s)</th>
+          <th colspan="3" class="sep" style="color:#f472b6">Metatarsiano — Ángulo (°)</th>
+        </tr>
+        <tr>
+          <th class="sep">vX</th><th>vY</th><th>vZ</th>
+          <th class="sep">Roll</th><th>Pitch</th><th>Yaw</th>
+          <th class="sep">vX</th><th>vY</th><th>vZ</th>
+          <th class="sep">Roll</th><th>Pitch</th><th>Yaw</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── UUIDs — deben coincidir con el código Arduino ──
+const SERVICE_UUID  = '19b10000-e8f2-537e-4f6c-d104768a1214';
+const PISADA_UUID   = '19b10001-e8f2-537e-4f6c-d104768a1214';
+const CMD_UUID      = '19b10002-e8f2-537e-4f6c-d104768a1214';
+
+// ── Porcentajes de los 9 instantes ──
+const INSTANTES = [0, 10, 20, 27, 35, 67, 92, 98, 100];
+const NUM_INSTANTES = 9;
+
+// ── Estado global ──
+let device, pisadaChar, cmdChar;
+let pisadas = [];         // array de pisadas recibidas
+let pisadaActual = null;  // pisada que se está recibiendo
+let muestraIdx   = 0;     // qué muestra estamos esperando
+let pisadaSeleccionada = 0;
+
+// ── Log ──
+function log(msg, tipo = '') {
+  const d = document.getElementById('log');
+  d.innerHTML += `<div class="${tipo}">▸ ${msg}</div>`;
+  d.scrollTop = d.scrollHeight;
+}
+
+// ── Estado BLE visual ──
+function setEstado(txt, tipo) {
+  document.getElementById('estado-txt').textContent = txt;
+  document.getElementById('s-estado').textContent   = txt;
+  const dot = document.getElementById('dot');
+  dot.className = 'dot ' + (tipo || '');
+}
+
+// ── Conectar BLE ──
+document.getElementById('btn-conectar').addEventListener('click', async () => {
+  try {
+    log('Buscando dispositivo BLE...', 'info');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'Tobillera' }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    pisadaChar    = await service.getCharacteristic(PISADA_UUID);
+    cmdChar       = await service.getCharacteristic(CMD_UUID);
+
+    await pisadaChar.startNotifications();
+    pisadaChar.addEventListener('characteristicvaluechanged', recibirDatos);
+
+    setEstado('Conectado', 'conectado');
+    log('Conectado a Tobillera ✓', 'ok');
+
+    document.getElementById('btn-iniciar').disabled  = false;
+    document.getElementById('btn-conectar').disabled = true;
+
+    device.addEventListener('gattserverdisconnected', () => {
+      setEstado('Desconectado', '');
+      log('Dispositivo desconectado', 'err');
+      document.getElementById('btn-conectar').disabled  = false;
+      document.getElementById('btn-iniciar').disabled   = true;
+      document.getElementById('btn-terminar').disabled  = true;
+    });
+
+  } catch(e) {
+    log('Error al conectar: ' + e.message, 'err');
+  }
+});
+
+// ── Iniciar sesión ──
+document.getElementById('btn-iniciar').addEventListener('click', async () => {
+  try {
+    await cmdChar.writeValue(new Uint8Array([0x01]));
+    pisadas = [];
+    pisadaActual = null;
+    setEstado('Grabando', 'grabando');
+    log('Sesión iniciada — ¡a correr!', 'ok');
+    document.getElementById('btn-iniciar').disabled  = true;
+    document.getElementById('btn-terminar').disabled = false;
+  } catch(e) {
+    log('Error al iniciar: ' + e.message, 'err');
+  }
+});
+
+// ── Terminar sesión ──
+document.getElementById('btn-terminar').addEventListener('click', async () => {
+  try {
+    await cmdChar.writeValue(new Uint8Array([0x02]));
+    setEstado('Recibiendo', 'conectado');
+    log('Recibiendo datos...', 'info');
+    document.getElementById('btn-terminar').disabled = true;
+  } catch(e) {
+    log('Error al terminar: ' + e.message, 'err');
+  }
+});
+
+// ── Recibir datos BLE ──
+function recibirDatos(event) {
+  const data = event.target.value;
+  console.log(`Paquete: ${data.byteLength} bytes`);
+
+  // Marcador de CALIBRACION — 13 bytes empezando por 0xCA
+  if (data.byteLength === 13 && data.getUint8(0) === 0xCA) {
+    const rollAst  = data.getInt16(1,  true) / 100;
+    const pitchAst = data.getInt16(3,  true) / 100;
+    const yawAst   = data.getInt16(5,  true) / 100;
+    const rollMeta = data.getInt16(7,  true) / 100;
+    const pitchMeta = data.getInt16(9,  true) / 100;
+    const yawMeta  = data.getInt16(11, true) / 100;
+
+    document.getElementById('cal-panel').style.display = 'block';
+    document.getElementById('cal-roll-ast').textContent  = rollAst.toFixed(2);
+    document.getElementById('cal-pitch-ast').textContent = pitchAst.toFixed(2);
+    document.getElementById('cal-yaw-ast').textContent   = yawAst.toFixed(2);
+    document.getElementById('cal-roll-meta').textContent  = rollMeta.toFixed(2);
+    document.getElementById('cal-pitch-meta').textContent = pitchMeta.toFixed(2);
+    document.getElementById('cal-yaw-meta').textContent   = yawMeta.toFixed(2);
+
+    log('Calibración recibida ✓', 'ok');
+    return;
+  }
+
+  // Marcador de fin de sesión — 1 solo byte 0xFE
+  if (data.byteLength === 1 && data.getUint8(0) === 0xFE) {
+    log(`✓ ${pisadas.length} pisadas recibidas`, 'ok');
+    setEstado('Listo', 'conectado');
+    document.getElementById('btn-iniciar').disabled = false;
+    document.getElementById('btn-export').disabled  = false;
+    if (pisadas.length > 0) mostrarPisada(pisadas.length - 1);
+    return;
+  }
+
+  // Paquete de muestra — 26 bytes = un instante
+  if (data.byteLength === 26) {
+    const view = new DataView(data.buffer);
+
+    // Si es la primera muestra de una pisada nueva, crear la pisada
+    if (pisadaActual === null) {
+      pisadaActual = { instantes: [], duracion_ms: 0 };
+      muestraIdx = 0;
+    }
+
+    const m = {
+      velX1:  view.getInt16(0,  true) / 100,
+      velY1:  view.getInt16(2,  true) / 100,
+      velZ1:  view.getInt16(4,  true) / 100,
+      roll1:  view.getInt16(6,  true) / 100,
+      pitch1: view.getInt16(8,  true) / 100,
+      yaw1:   view.getInt16(10, true) / 100,
+      velX2:  view.getInt16(12, true) / 100,
+      velY2:  view.getInt16(14, true) / 100,
+      velZ2:  view.getInt16(16, true) / 100,
+      roll2:  view.getInt16(18, true) / 100,
+      pitch2: view.getInt16(20, true) / 100,
+      yaw2:   view.getInt16(22, true) / 100,
+      t_ms:   view.getUint16(24, true)
+    };
+
+    pisadaActual.instantes.push(m);
+    muestraIdx++;
+
+    // Cuando llegan los 9 instantes, la pisada está completa
+    if (muestraIdx >= NUM_INSTANTES) {
+      // La duración = t_ms del último instante (100%)
+      pisadaActual.duracion_ms = m.t_ms;
+      pisadas.push({ ...pisadaActual });
+      log(`Pisada ${pisadas.length} — ${m.t_ms} ms`, 'info');
+
+      pisadaActual = null;
+      muestraIdx = 0;
+
+      actualizarTabs();
+      mostrarPisada(pisadas.length - 1);
+    }
+  }
+}
+
+// ── Formatear valor con color ──
+function fmtVal(v, cls) {
+  const color = v > 0 ? 'val-pos' : v < 0 ? 'val-neg' : '';
+  return `<td class="${cls || ''} ${color}">${v.toFixed(2)}</td>`;
+}
+
+// ── Mostrar pisada en la tabla ──
+function mostrarPisada(idx) {
+  if (idx < 0 || idx >= pisadas.length) return;
+  pisadaSeleccionada = idx;
+  const p = pisadas[idx];
+
+  document.getElementById('empty').style.display           = 'none';
+  document.getElementById('tabla-contenido').style.display = 'block';
+  document.getElementById('tabla-titulo').textContent      = `Pisada ${idx + 1}`;
+  document.getElementById('tabla-duracion').textContent    = `${p.duracion_ms} ms`;
+
+  // Actualizar tabs activo
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', i === idx);
+  });
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+
+  p.instantes.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="pct-cell">${INSTANTES[i]}%</td>
+      <td class="t-cell sep">${m.t_ms}</td>
+      ${fmtVal(m.velX1,'sep')}${fmtVal(m.velY1)}${fmtVal(m.velZ1)}
+      ${fmtVal(m.roll1,'sep')}${fmtVal(m.pitch1)}${fmtVal(m.yaw1)}
+      ${fmtVal(m.velX2,'sep')}${fmtVal(m.velY2)}${fmtVal(m.velZ2)}
+      ${fmtVal(m.roll2,'sep')}${fmtVal(m.pitch2)}${fmtVal(m.yaw2)}
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ── Actualizar tabs ──
+function actualizarTabs() {
+  const cont = document.getElementById('tabs');
+  cont.innerHTML = '';
+  pisadas.forEach((_, i) => {
+    const b = document.createElement('div');
+    b.className = 'tab' + (i === pisadaSeleccionada ? ' active' : '');
+    b.textContent = `P${i + 1}`;
+    b.addEventListener('click', () => mostrarPisada(i));
+    cont.appendChild(b);
+  });
+}
+
+// ── Exportar CSV ──
+document.getElementById('btn-export').addEventListener('click', () => {
+  let csv = 'Pisada,Instante_%,t_ms,vX1,vY1,vZ1,Roll1,Pitch1,Yaw1,vX2,vY2,vZ2,Roll2,Pitch2,Yaw2,Duracion_ms\n';
+
+  pisadas.forEach((p, pi) => {
+    p.instantes.forEach((m, i) => {
+      csv += [
+        pi + 1, INSTANTES[i], m.t_ms,
+        m.velX1, m.velY1, m.velZ1,
+        m.roll1, m.pitch1, m.yaw1,
+        m.velX2, m.velY2, m.velZ2,
+        m.roll2, m.pitch2, m.yaw2,
+        p.duracion_ms
+      ].join(',') + '\n';
+    });
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'tobillera_sesion.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('CSV exportado ✓', 'ok');
+});
+</script>
+</body>
+</html>
