@@ -106,6 +106,7 @@ void loop() {
         case ESPERANDO:
             digitalWrite(LED_BUILTIN, (millis() / 150) % 2); // parpadeo rapido
             if (millis() - inicioMs > ESPERA_INICIO_MS) {
+                Serial.println("espera");
                 estadoTest = GRABANDO;
                 inicioGrabacionMs = millis();
                 numMuestras = 0;
@@ -115,6 +116,7 @@ void loop() {
         case GRABANDO:
             digitalWrite(LED_BUILTIN, HIGH);
             if (numMuestras < MAX_MUESTRAS) {
+                Serial.println("corre ahora");
                 buffer[numMuestras].t_ms     = (uint16_t)(millis() - inicioGrabacionMs);
                 buffer[numMuestras].gy1      = gy1;
                 buffer[numMuestras].accMag1  = accMag1;
@@ -122,6 +124,7 @@ void loop() {
             }
             if (millis() - inicioGrabacionMs > DURACION_GRABACION_MS
                 || numMuestras >= MAX_MUESTRAS) {
+                    Serial.println("deja de correr");
                 estadoTest = LISTO;
                 digitalWrite(LED_BUILTIN, LOW);
             }

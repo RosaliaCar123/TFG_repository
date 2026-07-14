@@ -2,15 +2,19 @@
 // ============================================================
 // TOBILLERA TFG — AVGS + Calibracion estatica
 //
-// Flujo de uso:
-//   1. Usuario manda 0x01 desde la app
-//   2. Se queda 5 segundos QUIETO (pie plano en el suelo)
-//   3. El micro promedia los angulos y guarda offsets
-//   4. Empieza a detectar pisadas normalmente
-//   5. Los angulos guardados son RELATIVOS a la posicion neutra
-//  *** Adicionalmente
-//   6. Se para a los 10 segundos para poder hacerlo sola 
-//   7. ELimina las dos primeras y las dos segundas 
+// Flujo de uso (pensado para correr lejos del ordenador):
+//   1. Se encienden los sensores (setup)
+//   2. El ordenador manda CALIBRAR (0x01): se converge el filtro y se
+//      promedian 5 segundos QUIETO -> offsets de posicion neutra
+//   3. El micro NO empieza aun: espera una segunda señal INICIAR (0x03)
+//   4. Tras INICIAR, la persona corre y puede alejarse todo lo que quiera:
+//      la deteccion y el almacenamiento siguen aunque se pierda el BLE
+//   5. Se almacenan los 9 instantes de cada pisada hasta detectar 14
+//      (las 2 primeras y las 2 ultimas se descartan -> 10 validas)
+//   6. Al llegar a 14 pisadas se DETIENE el almacenamiento (LED fijo)
+//   7. La persona vuelve, el ordenador se reconecta y manda ENVIAR (0x02):
+//      se transmiten las 10 pisadas validas por BLE
+//   8. Los angulos guardados son RELATIVOS a la posicion neutra
 //
 // Deteccion por giroscopio (metodo AVGS)
 //  Angular Velocity-based Gait Segmentation
@@ -50,16 +54,30 @@
 #define NUM_INSTANTES    9
 #define UMBRAL_RUIDO     0.04f
 
+// Nº de pisadas a almacenar antes de parar. Se descartan las 2 primeras
+// (aceleracion) y las 2 ultimas (frenado) -> 14 - 4 = 10 validas.
+#define PISADAS_TOTALES  14
+
+// --- Comandos que manda el ordenador por BLE ---
+#define CMD_CALIBRAR  0x01  // converge filtros + 5s quieto -> offsets
+#define CMD_INICIAR   0x03  // arranca la deteccion/almacenamiento (a correr)
+#define CMD_ENVIAR    0x02  // transmite las pisadas validas almacenadas
+
 // --- Deteccion por giroscopio (metodo AVGS, eje Y unicamente) ---
 #define UMBRAL_MSW_DPS       190.0f // altura minima del pico de gy1 durante el vuelo
 #define DURACION_MINIMA_MS   150// descarta pisadas inferiores a 150ms: 6.67 Hz de zancada
 #define DURACION_MAXIMA_MS   500
 #define BLOQUEO_MS           100 //evita oscilaciones 100ms despues de una pisada (filtra)
 
-#define UMBRAL_IMPACTO_G     1.15f // pico de |accel| del astragalo que confirma el impacto (g)
-                                    // calibrado con datos reales: reposo/ruido ~1.02-1.10g, impacto ~1.20-1.27g
-#define VENTANA_IMPACTO_MS   50    // ventana (antes O despues del cruce por cero) para confirmar el IC
 #define UMBRAL_DESPEGUE_DPS  80.0f // subida de gy1 desde su minimo en apoyo que marca el despegue
+
+// --- Proteccion del filtro Madgwick contra impactos/dinamica fuerte ---
+// El acelerometro solo sirve como referencia de "hacia donde tira la
+// gravedad" cuando su magnitud esta cerca de 1g. Fuera de esta banda
+// (impacto contra el suelo, dinamica fuerte del balanceo) esa lectura
+// esta contaminada y NO se usa para corregir el angulo (ver actualizarFiltro).
+#define UMBRAL_ACEL_MIN_G  0.7f
+#define UMBRAL_ACEL_MAX_G  1.3f
 
 // --- Envio BLE ---
 #define BLE_DELAY_MS 70 // margen entre notificaciones para que el central no pierda paquetes
@@ -99,9 +117,18 @@ Madgwick filtroMeta;
 
 Pisada   sesion[MAX_PISADAS];
 uint8_t  numPisadas   = 0;
-bool     sesionActiva = false;
 bool     calibrado    = false;
-uint32_t inicioSesionMs = 0;
+uint32_t ultimaMuestra = 0; // reloj del muestreo a 100Hz (global: el loop ya no es bloqueante)
+
+// --- Maquina de estados de la aplicacion (nivel superior) ---
+// Independiente del BLE: la deteccion sigue aunque se pierda la conexion.
+enum EstadoApp {
+    APP_IDLE,             // recien encendido / esperando comando de CALIBRAR
+    APP_ESPERANDO_START,  // calibrado, filtros calientes, esperando comando de INICIAR
+    APP_GRABANDO,         // detectando y almacenando pisadas (sin depender del BLE)
+    APP_COMPLETO          // 14 pisadas guardadas, esperando reconexion para ENVIAR
+};
+EstadoApp estadoApp = APP_IDLE;
 
 // --- Offsets de calibracion ---
 float rollOffAst  = 0, pitchOffAst  = 0, yawOffAst  = 0;
@@ -123,10 +150,13 @@ float gy1Anterior = 0;
 bool     ascendiendoMSW  = false; // gy1 esta subiendo -> buscando el pico del vuelo
 bool     descendiendoApoyo = false; // gy1 esta bajando dentro del apoyo -> buscando el minimo
 float    gy1Min          = 0;     // minimo local de gy1 durante el apoyo (para detectar el despegue)
-uint32_t ultimoImpactoMs = 0;     // marca temporal del ultimo pico de aceleracion (confirmacion del IC)
-bool     cruceCeroPendiente = false; // ya vimos el cruce por cero, esperando confirmar con el impacto
-uint32_t crucePendienteMs   = 0;     // instante en que se vio ese cruce
 
+// LIMITACION CONOCIDA (gimbal lock): roll/pitch/yaw son fiables mientras
+// pitch se mantenga lejos de +/-90 grados. Cuando el pie rota mucho en el
+// tramo de despegue (pitch > ~55-60 grados, tipicamente hacia el 67-100%
+// de la pisada), roll y yaw pueden dar saltos grandes sin significado fisico
+// aunque esten dentro de wrap180 -> ver conversacion del TFG sobre esto.
+// Solucion de fondo pendiente: transmitir cuaterniones en vez de angulos de Euler.
 struct EstadoIMU {
     float velX = 0, velY = 0, velZ = 0;
     float roll = 0, pitch = 0, yaw = 0;
@@ -153,6 +183,36 @@ void resetEstado(EstadoIMU& e) {
     e.tiempoAnterior = micros();
 }
 
+// Envuelve un angulo al rango [-180, 180]. Necesario porque el angulo
+// RELATIVO (absoluto - offset) puede cruzar la frontera de +/-180 y saltar
+// de golpe (p.ej. de +179 a -179 con un movimiento real de solo 2 grados).
+// Esto expresa siempre la rotacion como el camino mas corto respecto a la
+// posicion neutra, y elimina esos saltos falsos en Roll y Yaw.
+inline float wrap180(float a) {
+    while (a >  180.0f) a -= 360.0f;
+    while (a < -180.0f) a += 360.0f;
+    return a;
+}
+
+// Actualiza un filtro Madgwick protegiendo la correccion del acelerometro
+// contra impactos/dinamica fuerte. El acelerometro solo es una referencia
+// valida de "hacia donde tira la gravedad" cuando su magnitud ronda 1g; en
+// un impacto (varios g) o durante un balanceo muy dinamico esa lectura esta
+// contaminada por aceleracion lineal y corregiria el angulo hacia un valor
+// erroneo. Fuera de la banda [UMBRAL_ACEL_MIN_G, UMBRAL_ACEL_MAX_G] se pasa
+// (0,0,0): la libreria Madgwick trata ese caso como "sin acelerometro" y
+// esa muestra se integra SOLO con el giroscopio, que no se ve afectado por
+// el golpe.
+void actualizarFiltro(Madgwick& filtro, float gx, float gy, float gz,
+                       float ax, float ay, float az) {
+    float accMag = sqrt(ax*ax + ay*ay + az*az);
+    if (accMag > UMBRAL_ACEL_MIN_G && accMag < UMBRAL_ACEL_MAX_G) {
+        filtro.updateIMU(gx, gy, gz, ax, ay, az);
+    } else {
+        filtro.updateIMU(gx, gy, gz, 0.0f, 0.0f, 0.0f);
+    }
+}
+
 void actualizarEstado(EstadoIMU& e, Madgwick& filtro,
                       float ax, float ay, float az,
                       float gx, float gy, float gz,
@@ -163,7 +223,7 @@ void actualizarEstado(EstadoIMU& e, Madgwick& filtro,
     e.tiempoAnterior = ahora;
     if (dt <= 0 || dt > 0.1f) return;
 
-    filtro.updateIMU(gx, gy, gz, ax, ay, az);
+    actualizarFiltro(filtro, gx, gy, gz, ax, ay, az);
     // psasr a radianes:
     float roll  = filtro.getRoll()  * PI / 180.0f;
     float pitch = filtro.getPitch() * PI / 180.0f;
@@ -184,10 +244,11 @@ void actualizarEstado(EstadoIMU& e, Madgwick& filtro,
     e.velY += linAy * dt;
     e.velZ += linAz * dt;
 
-    // Angulos RELATIVOS: restar el offset de calibracion
-    e.roll  = filtro.getRoll()  - rollOff;
-    e.pitch = filtro.getPitch() - pitchOff;
-    e.yaw   = filtro.getYaw()   - yawOff;
+    // Angulos RELATIVOS: restar el offset de calibracion y envolver a [-180,180]
+    // (wrap180 evita los saltos falsos cerca de la frontera de +/-180 grados)
+    e.roll  = wrap180(filtro.getRoll()  - rollOff);
+    e.pitch = wrap180(filtro.getPitch() - pitchOff);
+    e.yaw   = wrap180(filtro.getYaw()   - yawOff);
 }
 
 // aproxiar a dos decimales para reducir a 2bytes: 34767 son limites 
@@ -208,21 +269,22 @@ void enviarPisadaBLE(uint8_t idx) {
     Pisada& p = sesion[idx];
     for (uint8_t i = 0; i < NUM_INSTANTES; i++) {
         Muestra& m = p.instantes[i];
-        uint8_t buf[26];
-        memcpy(buf,      &m.velX1, 2);
-        memcpy(buf + 2,  &m.velY1, 2);
-        memcpy(buf + 4,  &m.velZ1, 2);
-        memcpy(buf + 6,  &m.posX1, 2);
-        memcpy(buf + 8,  &m.posY1, 2);
-        memcpy(buf + 10, &m.posZ1, 2);
-        memcpy(buf + 12, &m.velX2, 2);
-        memcpy(buf + 14, &m.velY2, 2);
-        memcpy(buf + 16, &m.velZ2, 2);
-        memcpy(buf + 18, &m.posX2, 2);
-        memcpy(buf + 20, &m.posY2, 2);
-        memcpy(buf + 22, &m.posZ2, 2);
-        memcpy(buf + 24, &m.t_ms,  2);
-        pisadaChar.writeValue(buf, 26);
+        uint8_t buf[27];
+        buf[0] = i; // indice del instante (0-8): permite a la app detectar paquetes BLE perdidos
+        memcpy(buf + 1,  &m.velX1, 2);
+        memcpy(buf + 3,  &m.velY1, 2);
+        memcpy(buf + 5,  &m.velZ1, 2);
+        memcpy(buf + 7,  &m.posX1, 2);
+        memcpy(buf + 9,  &m.posY1, 2);
+        memcpy(buf + 11, &m.posZ1, 2);
+        memcpy(buf + 13, &m.velX2, 2);
+        memcpy(buf + 15, &m.velY2, 2);
+        memcpy(buf + 17, &m.velZ2, 2);
+        memcpy(buf + 19, &m.posX2, 2);
+        memcpy(buf + 21, &m.posY2, 2);
+        memcpy(buf + 23, &m.posZ2, 2);
+        memcpy(buf + 25, &m.t_ms,  2);
+        pisadaChar.writeValue(buf, 27);
         delay(BLE_DELAY_MS);
     }
 }
@@ -256,7 +318,7 @@ void mostrarPisadaSerial(uint8_t idx) {
 }
 
 // ============================================================
-// FUNCION DE CALIBRACION ESTATICA
+// FUNCION DE CALIBRACION ESTATICA converger el filtro+ calibracion
 // ============================================================
 void calibrarPosicionNeutra() {
     Serial.println();
@@ -281,7 +343,7 @@ void calibrarPosicionNeutra() {
         float gx1 = imuAstragalo.readFloatGyroX();
         float gy1 = imuAstragalo.readFloatGyroY();
         float gz1 = imuAstragalo.readFloatGyroZ();
-        filtroAst.updateIMU(gx1, gy1, gz1, ax1, ay1, az1);
+        actualizarFiltro(filtroAst, gx1, gy1, gz1, ax1, ay1, az1);
 
         // Leer metatarsiano
         sensors_event_t accel, gyro, temp;
@@ -292,7 +354,7 @@ void calibrarPosicionNeutra() {
         float gx2 = gyro.gyro.x * 180.0f / PI;
         float gy2 = gyro.gyro.y * 180.0f / PI;
         float gz2 = gyro.gyro.z * 180.0f / PI;
-        filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);
+        actualizarFiltro(filtroMeta, gx2, gy2, gz2, ax2, ay2, az2);
 
         delay(10);
     }
@@ -313,7 +375,7 @@ void calibrarPosicionNeutra() {
         float gx1 = imuAstragalo.readFloatGyroX();
         float gy1 = imuAstragalo.readFloatGyroY();
         float gz1 = imuAstragalo.readFloatGyroZ();
-        filtroAst.updateIMU(gx1, gy1, gz1, ax1, ay1, az1);
+        actualizarFiltro(filtroAst, gx1, gy1, gz1, ax1, ay1, az1);
 
         // Leer metatarsiano
         sensors_event_t accel, gyro, temp;
@@ -324,7 +386,7 @@ void calibrarPosicionNeutra() {
         float gx2 = gyro.gyro.x * 180.0f / PI;
         float gy2 = gyro.gyro.y * 180.0f / PI;
         float gz2 = gyro.gyro.z * 180.0f / PI;
-        filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);
+        actualizarFiltro(filtroMeta, gx2, gy2, gz2, ax2, ay2, az2);
 
         // Acumular angulos
         sumRollAst  += filtroAst.getRoll();
@@ -384,11 +446,203 @@ void calibrarPosicionNeutra() {
 }
 
 // ============================================================
+// ENVIO DE LA SESION ALMACENADA
+// Descarta 2 primeras + 2 ultimas y transmite las validas por BLE
+// ============================================================
+void enviarSesionBLE() {
+    uint8_t inicio = 2;
+    uint8_t fin_idx = (numPisadas >= 2) ? (numPisadas - 2) : 0;
+    uint8_t pisadasValidas = (fin_idx > inicio) ? (fin_idx - inicio) : 0;
+
+    Serial.print("Total capturadas: "); Serial.println(numPisadas);
+    Serial.println("Descartadas: 2 primeras + 2 ultimas");
+    Serial.print("Enviando "); Serial.print(pisadasValidas);
+    Serial.println(" pisadas validas...");
+
+    for (uint8_t i = inicio; i < fin_idx; i++) {
+        enviarPisadaBLE(i);
+        mostrarPisadaSerial(i);
+        delay(BLE_DELAY_MS);
+    }
+    delay(BLE_DELAY_MS * 2);
+    uint8_t fin[1] = {0xFE};
+    pisadaChar.writeValue(fin, 1);
+    delay(BLE_DELAY_MS);
+    Serial.println("Listo");
+}
+
+// ============================================================
+// MUESTREO 100Hz + DETECCION AVGS
+// Se llama fuera del bucle de conexion: la deteccion sigue aunque
+// se pierda el BLE. Si no estamos grabando, solo mantiene los
+// filtros Madgwick calientes para no perder la referencia.
+// ============================================================
+void muestrear() {
+    // Leer astragalo
+    float ax1 = imuAstragalo.readFloatAccelX();
+    float ay1 = imuAstragalo.readFloatAccelY();
+    float az1 = imuAstragalo.readFloatAccelZ();
+    float gx1 = imuAstragalo.readFloatGyroX();
+    float gy1 = imuAstragalo.readFloatGyroY();
+    float gz1 = imuAstragalo.readFloatGyroZ();
+
+    // Leer metatarsiano
+    sensors_event_t accel2, gyro2, temp2;
+    imuMeta.getEvent(&accel2, &gyro2, &temp2);
+    float ax2 = accel2.acceleration.x / 9.81f;
+    float ay2 = accel2.acceleration.y / 9.81f;
+    float az2 = accel2.acceleration.z / 9.81f;
+    float gx2 = gyro2.gyro.x * 180.0f / PI;
+    float gy2 = gyro2.gyro.y * 180.0f / PI;
+    float gz2 = gyro2.gyro.z * 180.0f / PI;
+
+    // Fuera de grabacion: solo mantener los filtros al dia
+    if (estadoApp != APP_GRABANDO) {
+        actualizarFiltro(filtroAst, gx1, gy1, gz1, ax1, ay1, az1);
+        actualizarFiltro(filtroMeta, gx2, gy2, gz2, ax2, ay2, az2);
+        return;
+    }
+
+    // ============================================================
+    // METODO AVGS — Deteccion por giroscopio del astragalo (solo gy1)
+    // ============================================================
+    switch (estado) {
+
+        // Buscando el balanceo (MSW): pico local maximo de gy1.
+        case ESPERANDO_MSW:
+            if (gy1 > gy1Anterior) {
+                ascendiendoMSW = true;
+            } else {
+                if (ascendiendoMSW && gy1Anterior > UMBRAL_MSW_DPS
+                    && (millis() - finPisadaMs) > BLOQUEO_MS) {
+                    estado = ESPERANDO_IC;
+                }
+                ascendiendoMSW = false;
+            }
+            break;
+
+        // Detectando el impacto (IC): cinematica pura.
+        // gy1 cruza por cero de positivo a negativo: el pie deja de rotar
+        // hacia delante porque toca el suelo.
+        case ESPERANDO_IC:
+            if (gy1Anterior > 0 && gy1 <= 0 && numPisadas < MAX_PISADAS) {
+                estado = EN_APOYO;
+                inicioPisada = millis();
+                sesion[numPisadas].numMuestras = 0;
+                resetEstado(estadoAst);
+                resetEstado(estadoMeta);
+                descendiendoApoyo = false;
+                gy1Min = gy1;
+                // IMPORTANTE: NO reiniciar Madgwick aqui, se perderia la calibracion
+                Serial.print("Pisada "); Serial.println(numPisadas + 1);
+            }
+            break;
+
+        case EN_APOYO:
+            // Calcula y guarda cada 10 ms la velocidad y los angulos
+            actualizarEstado(estadoAst,  filtroAst,
+                             ax1, ay1, az1, gx1, gy1, gz1,
+                             rollOffAst, pitchOffAst, yawOffAst);
+            actualizarEstado(estadoMeta, filtroMeta,
+                             ax2, ay2, az2, gx2, gy2, gz2,
+                             rollOffMeta, pitchOffMeta, yawOffMeta);
+
+            {
+                Pisada& p = sesion[numPisadas];
+                if (p.numMuestras < MAX_MUESTRAS) {
+                    Muestra& m = p.muestras[p.numMuestras++];
+                    m.velX1 = toInt16Vel(estadoAst.velX);
+                    m.velY1 = toInt16Vel(estadoAst.velY);
+                    m.velZ1 = toInt16Vel(estadoAst.velZ);
+                    m.posX1 = toInt16Ang(estadoAst.roll);
+                    m.posY1 = toInt16Ang(estadoAst.pitch);
+                    m.posZ1 = toInt16Ang(estadoAst.yaw);
+                    m.velX2 = toInt16Vel(estadoMeta.velX);
+                    m.velY2 = toInt16Vel(estadoMeta.velY);
+                    m.velZ2 = toInt16Vel(estadoMeta.velZ);
+                    m.posX2 = toInt16Ang(estadoMeta.roll);
+                    m.posY2 = toInt16Ang(estadoMeta.pitch);
+                    m.posZ2 = toInt16Ang(estadoMeta.yaw);
+                    m.t_ms  = (uint16_t)(millis() - inicioPisada);
+                }
+                // Despegue (Terminal Contact): inflexion de gy1 (minimo local
+                // seguido de subida), o timeout de seguridad
+                uint32_t duracion = millis() - inicioPisada;
+
+                if (gy1 < gy1Min) {
+                    gy1Min = gy1;
+                    descendiendoApoyo = true;
+                }
+                bool inflexionDespegue = descendiendoApoyo
+                                          && (gy1 - gy1Min) > UMBRAL_DESPEGUE_DPS;
+
+                if (duracion > DURACION_MINIMA_MS &&
+                    (inflexionDespegue || duracion > DURACION_MAXIMA_MS)) {
+
+                    if (p.numMuestras >= NUM_INSTANTES) {
+                        p.duracion_ms = (uint16_t)duracion;
+                        seleccionarInstantes(p);
+                        numPisadas++;
+                    }
+                    estado = ESPERANDO_MSW;
+                    finPisadaMs = millis();
+
+                    // ¿Ya tenemos las 14? -> parar de almacenar
+                    if (numPisadas >= PISADAS_TOTALES) {
+                        estadoApp = APP_COMPLETO;
+                        Serial.println();
+                        Serial.println("14 pisadas almacenadas — vuelve al ordenador para descargar");
+                    }
+                }
+            }
+            break;
+
+        default:
+            estado = ESPERANDO_MSW;
+            break;
+    }
+
+    gy1Anterior = gy1;
+
+    // Mantener filtros Madgwick actualizados fuera del apoyo (no perder referencia)
+    if (estado != EN_APOYO) {
+        actualizarFiltro(filtroAst, gx1, gy1, gz1, ax1, ay1, az1);
+        actualizarFiltro(filtroMeta, gx2, gy2, gz2, ax2, ay2, az2);
+    }
+}
+
+// ============================================================
+// LED integrado — indica el estado sin necesidad del ordenador
+// (XIAO nRF52840: LED activo en BAJO, LOW = encendido)
+// ============================================================
+void actualizarLED() {
+    switch (estadoApp) {
+        case APP_ESPERANDO_START:
+            // parpadeo lento: calibrado, esperando la señal de inicio
+            digitalWrite(LED_BUILTIN, (millis() / 500) % 2 ? HIGH : LOW);
+            break;
+        case APP_GRABANDO:
+            // parpadeo rapido: grabando, corre
+            digitalWrite(LED_BUILTIN, (millis() / 150) % 2 ? HIGH : LOW);
+            break;
+        case APP_COMPLETO:
+            digitalWrite(LED_BUILTIN, LOW);  // fijo encendido: ya puedes volver
+            break;
+        default:
+            digitalWrite(LED_BUILTIN, HIGH); // apagado
+            break;
+    }
+}
+
+// ============================================================
 // SETUP
 // ============================================================
 void setup() {
     delay(3000);
     Serial.begin(115200);
+
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, HIGH); // apagado (activo en BAJO)
 
     NRF_P1->PIN_CNF[8] = 1;
     NRF_P1->OUTSET = (1 << 8);
@@ -419,6 +673,11 @@ void setup() {
     datoService.addCharacteristic(pisadaChar);
     datoService.addCharacteristic(cmdChar);
     BLE.addService(datoService);
+
+    // Al desconectarse (p.ej. la persona se aleja corriendo) hay que volver a
+    // anunciar para que el ordenador pueda reconectar al terminar la carrera
+    BLE.setEventHandler(BLEDisconnected, onBLEDisconnect);
+
     BLE.advertise();
 
     Serial.println("Listo — esperando BLE...");
@@ -426,275 +685,64 @@ void setup() {
 }
 
 // ============================================================
-// LOOP
+// Handler de desconexion BLE: vuelve a anunciar para permitir
+// que el ordenador reconecte cuando la persona regrese
+// ============================================================
+void onBLEDisconnect(BLEDevice central) {
+    Serial.println("BLE desconectado — re-anunciando");
+    BLE.advertise();
+}
+
+// ============================================================
+// LOOP — no bloqueante
+// La deteccion/almacenamiento corre SIEMPRE que estemos grabando,
+// haya o no conexion BLE (la persona puede alejarse corriendo).
 // ============================================================
 void loop() {
 
-    //comprueba estar conectado a un disposituvo por ble 
+    // Procesa la pila BLE (conexiones, comandos). No bloquea: devuelve
+    // el central si hay alguien conectado, o nada si no.
     BLEDevice central = BLE.central();
-    if (!central) return;
 
-    Serial.print("Conectado: ");
-    Serial.println(central.address());
+    // --- Comandos del ordenador (solo cuando hay conexion) ---
+    if (central && central.connected() && cmdChar.written()) {
+        uint8_t cmd = cmdChar.value()[0];
 
-    while (central.connected()) {
-
-        // Comandos BLE
-        if (cmdChar.written()) {
-            uint8_t cmd = cmdChar.value()[0];
-
-            if (cmd == 0x01 && !sesionActiva) {
-                numPisadas = 0;
-
-                // FASE 1: Calibracion estatica (5 segundos quieto)
-                calibrarPosicionNeutra();
-
-                // FASE 2: Empezar deteccion de pisadas
-                sesionActiva = true;
-                estado = ESPERANDO_MSW;
-                //Serial.println("Sesion iniciada — puede empezar a correr");
-                // se para auto en 10 segundos las proximas dos lineas:
-                inicioSesionMs = millis();  // ← guardar tiempo de inicio
-                Serial.println("Sesion iniciada — auto-stop en 10s");
-
-            } else if (cmd == 0x02 && sesionActiva) {
-                sesionActiva = false;
-                estado = ESPERANDO_MSW;
-
-              /* Se envían todas las pisadas:
-                Serial.print("Enviando ");
-                Serial.print(numPisadas);
-                Serial.println(" pisadas...");
-
-                for (uint8_t i = 0; i < numPisadas; i++) {
-                    enviarPisadaBLE(i);
-                    mostrarPisadaSerial(i);
-                    delay(50);
-                }*/
-                // Descartar 2 primeras y 2 ultimas pisadas (aceleracion y frenado)
-                uint8_t inicio = 2;
-                uint8_t fin_idx = (numPisadas >= 2) ? (numPisadas - 2) : 0;
-                uint8_t pisadasValidas = (fin_idx > inicio) ? (fin_idx - inicio) : 0;
-
-                Serial.print("Total capturadas: "); Serial.println(numPisadas);
-                Serial.print("Descartadas: 2 primeras + 2 ultimas");
-                Serial.println();
-                Serial.print("Enviando "); Serial.print(pisadasValidas);
-                Serial.println(" pisadas validas...");
-
-                for (uint8_t i = inicio; i < fin_idx; i++) {
-                    enviarPisadaBLE(i);
-                    mostrarPisadaSerial(i);
-                    delay(BLE_DELAY_MS);
-                }
-                delay(BLE_DELAY_MS * 2);
-                uint8_t fin[1] = {0xFE};
-                pisadaChar.writeValue(fin, 1);
-                delay(BLE_DELAY_MS);
-                Serial.println("Listo");
-            }
-        }
-
-        if (!sesionActiva) continue;
-        // AUTO-STOP a los 10 segundos
-        if (millis() - inicioSesionMs > 15000) {
-            Serial.println();
-            Serial.println("Auto-stop a los 10 segundos");
-            sesionActiva = false;
+        // CALIBRAR: converge filtros + 5s quieto + envia offsets
+        if (cmd == CMD_CALIBRAR && estadoApp == APP_IDLE) {
+            numPisadas = 0;
+            calibrarPosicionNeutra();
             estado = ESPERANDO_MSW;
-
-            /* Se envian todas las pisadas:
-            Serial.print("Enviando ");
-            Serial.print(numPisadas);
-            Serial.println(" pisadas...");
-
-            for (uint8_t i = 0; i < numPisadas; i++) {
-                enviarPisadaBLE(i);
-                mostrarPisadaSerial(i);
-                delay(50);
-            }*/
-            // Descartar 2 primeras y 2 ultimas pisadas (aceleracion y frenado)
-            uint8_t inicio = 2;
-            uint8_t fin_idx = (numPisadas >= 2) ? (numPisadas - 2) : 0;
-            uint8_t pisadasValidas = (fin_idx > inicio) ? (fin_idx - inicio) : 0;
-
-            Serial.print("Total capturadas: "); Serial.println(numPisadas);
-            Serial.print("Descartadas: 2 primeras + 2 ultimas");
-            Serial.println();
-            Serial.print("Enviando "); Serial.print(pisadasValidas);
-            Serial.println(" pisadas validas...");
-
-            for (uint8_t i = inicio; i < fin_idx; i++) {
-                enviarPisadaBLE(i);
-                mostrarPisadaSerial(i);
-                delay(BLE_DELAY_MS);
-            }
-
-            delay(BLE_DELAY_MS * 2);
-            uint8_t fin[1] = {0xFE};
-            pisadaChar.writeValue(fin, 1);
-            delay(BLE_DELAY_MS);
-            Serial.println("Listo");
-            continue;
+            estadoApp = APP_ESPERANDO_START;
+            ultimaMuestra = micros();  // arrancar el reloj de muestreo
+            Serial.println("Calibrado — esperando señal de INICIO (0x03) para correr");
         }
-
-        // Control 100Hz
-        static unsigned long ultimaMuestra = 0;
-        //static float gy1_Anterior = 0.0f;
-
-        unsigned long ahora = micros();
-        if (ahora - ultimaMuestra < INTERVALO_US) continue;
-        ultimaMuestra = ahora;
-
-        // Leer astragalo
-        float ax1 = imuAstragalo.readFloatAccelX();
-        float ay1 = imuAstragalo.readFloatAccelY();
-        float az1 = imuAstragalo.readFloatAccelZ();
-        float gx1 = imuAstragalo.readFloatGyroX();
-        float gy1 = imuAstragalo.readFloatGyroY();
-        float gz1 = imuAstragalo.readFloatGyroZ();
-
-        // Leer metatarsiano
-        sensors_event_t accel2, gyro2, temp2;
-        imuMeta.getEvent(&accel2, &gyro2, &temp2);
-        float ax2 = accel2.acceleration.x / 9.81f;
-        float ay2 = accel2.acceleration.y / 9.81f;
-        float az2 = accel2.acceleration.z / 9.81f;
-        float gx2 = gyro2.gyro.x * 180.0f / PI;
-        float gy2 = gyro2.gyro.y * 180.0f / PI;
-        float gz2 = gyro2.gyro.z * 180.0f / PI;
-
-        // ============================================================
-        // METODO AVGS — Deteccion por giroscopio del astragalo (solo gy1)
-        // ============================================================
-        switch (estado) {
-
-            // Buscando el balanceo (MSW): pico local maximo de gy1.
-            // Mientras la señal sube nos limitamos a marcarlo; en el instante
-            // en que empieza a bajar, la muestra anterior fue el pico.
-            case ESPERANDO_MSW:
-                if (gy1 > gy1Anterior) {
-                    ascendiendoMSW = true;
-                } else {
-                    if (ascendiendoMSW && gy1Anterior > UMBRAL_MSW_DPS
-                        && (millis() - finPisadaMs) > BLOQUEO_MS) {
-                        estado = ESPERANDO_IC;
-                        ultimoImpactoMs = 0;       // descarta impactos de zancadas anteriores
-                        cruceCeroPendiente = false;
-                    }
-                    ascendiendoMSW = false;
-                }
-                break;
-
-            // Detectando el impacto (IC): fusion cinematica + cinetica.
-            //  - Cinematica: gy1 cruza por cero de positivo a negativo.
-            //  - Cinetica:   pico de aceleracion en el astragalo (el choque), que en la
-            //    practica llega unos ms DESPUES del cruce por cero, no antes: por eso
-            //    el cruce se guarda como "pendiente" y se confirma en una ventana que
-            //    mira hacia adelante y hacia atras.
-            case ESPERANDO_IC: {
-                float accMag1 = sqrt(ax1*ax1 + ay1*ay1 + az1*az1);
-                if (accMag1 > UMBRAL_IMPACTO_G) {
-                    ultimoImpactoMs = millis();
-                }
-
-                bool cruceCero = (gy1Anterior > 0 && gy1 <= 0);
-                if (cruceCero) {
-                    cruceCeroPendiente = true;
-                    crucePendienteMs = millis();
-                }
-
-                if (cruceCeroPendiente) {
-                    bool impactoEnVentana = (millis() - ultimoImpactoMs) < VENTANA_IMPACTO_MS;
-                    bool ventanaExpirada  = (millis() - crucePendienteMs) > VENTANA_IMPACTO_MS;
-
-                    if (impactoEnVentana && numPisadas < MAX_PISADAS) {
-                        estado = EN_APOYO;
-                        inicioPisada = millis();
-                        sesion[numPisadas].numMuestras = 0;
-                        resetEstado(estadoAst);
-                        resetEstado(estadoMeta);
-                        descendiendoApoyo = false;
-                        gy1Min = gy1;
-                        cruceCeroPendiente = false;
-                        // IMPORTANTE: NO reiniciar Madgwick aqui,
-                        // sino se perderia la calibracion
-                        Serial.print("Pisada "); Serial.println(numPisadas + 1);
-                    } else if (ventanaExpirada) {
-                        cruceCeroPendiente = false; // este cruce no se confirmo, esperar el siguiente
-                    }
-                }
-                break;
-            }
-
-            case EN_APOYO:
-                // Actualizar con offsets de calibracion aplicados
-                //Calcula y guarda cada 10 ms la velocidad y anfulos
-                actualizarEstado(estadoAst,  filtroAst,
-                                 ax1, ay1, az1, gx1, gy1, gz1,
-                                 rollOffAst, pitchOffAst, yawOffAst);
-                actualizarEstado(estadoMeta, filtroMeta,
-                                 ax2, ay2, az2, gx2, gy2, gz2,
-                                 rollOffMeta, pitchOffMeta, yawOffMeta);
-
-                {
-                    Pisada& p = sesion[numPisadas];
-                    if (p.numMuestras < MAX_MUESTRAS) {
-                        Muestra& m = p.muestras[p.numMuestras++];
-                        m.velX1 = toInt16Vel(estadoAst.velX);
-                        m.velY1 = toInt16Vel(estadoAst.velY);
-                        m.velZ1 = toInt16Vel(estadoAst.velZ);
-                        m.posX1 = toInt16Ang(estadoAst.roll);
-                        m.posY1 = toInt16Ang(estadoAst.pitch);
-                        m.posZ1 = toInt16Ang(estadoAst.yaw);
-                        m.velX2 = toInt16Vel(estadoMeta.velX);
-                        m.velY2 = toInt16Vel(estadoMeta.velY);
-                        m.velZ2 = toInt16Vel(estadoMeta.velZ);
-                        m.posX2 = toInt16Ang(estadoMeta.roll);
-                        m.posY2 = toInt16Ang(estadoMeta.pitch);
-                        m.posZ2 = toInt16Ang(estadoMeta.yaw);
-                        m.t_ms  = (uint16_t)(millis() - inicioPisada);
-                    }
-                    //deteccion del despegue (Terminal Contact): inflexion de gy1
-                    //(minimo local durante el apoyo, seguido de una subida clara),
-                    //o timeout de seguridad si el algoritmo no encuentra la inflexion
-                    uint32_t duracion = millis() - inicioPisada;
-
-                    if (gy1 < gy1Min) {
-                        gy1Min = gy1;
-                        descendiendoApoyo = true;
-                    }
-                    bool inflexionDespegue = descendiendoApoyo
-                                              && (gy1 - gy1Min) > UMBRAL_DESPEGUE_DPS;
-
-                    if (duracion > DURACION_MINIMA_MS &&
-                        (inflexionDespegue || duracion > DURACION_MAXIMA_MS)) {
-
-                        if (p.numMuestras >= NUM_INSTANTES) {
-                            p.duracion_ms = (uint16_t)duracion;
-                            seleccionarInstantes(p);
-                            numPisadas++;
-                        }
-                        estado = ESPERANDO_MSW;
-                        finPisadaMs = millis();
-                    }
-                }
-                break;
-
-            default:
-                estado = ESPERANDO_MSW;
-                break;
+        // INICIAR: arranca la deteccion. La persona ya puede alejarse
+        else if (cmd == CMD_INICIAR && estadoApp == APP_ESPERANDO_START) {
+            numPisadas = 0;
+            estado = ESPERANDO_MSW;
+            estadoApp = APP_GRABANDO;
+            Serial.println("GRABANDO — corre. Para sola tras 14 pisadas.");
         }
-
-        gy1Anterior = gy1;
-
-        // Mantener filtros Madgwick actualizados incluso fuera del apoyo
-        // (importante para no perder la referencia)
-        if (estado != EN_APOYO) {
-            filtroAst.updateIMU(gx1, gy1, gz1, ax1, ay1, az1);
-            filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);
+        // ENVIAR: transmite las pisadas validas almacenadas
+        else if (cmd == CMD_ENVIAR && numPisadas > 0) {
+            Serial.println("Enviando sesion almacenada...");
+            enviarSesionBLE();
+            estadoApp = APP_IDLE;  // listo para otra sesion (recalibrar)
         }
     }
 
-    Serial.println("BLE desconectado");
+    // --- Muestreo 100Hz + deteccion (independiente del BLE) ---
+    // Se muestrea tambien en ESPERANDO_START para mantener los filtros
+    // Madgwick calientes hasta que llegue la señal de inicio.
+    if (estadoApp == APP_ESPERANDO_START || estadoApp == APP_GRABANDO) {
+        unsigned long ahora = micros();
+        if (ahora - ultimaMuestra >= INTERVALO_US) {
+            ultimaMuestra = ahora;
+            muestrear();
+        }
+    }
+
+    // --- Indicacion por LED (para saber el estado sin el ordenador) ---
+    actualizarLED();
 }

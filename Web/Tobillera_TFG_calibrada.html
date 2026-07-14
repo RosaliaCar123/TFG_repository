@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<!-- saved from url=(0118)file:///C:/Users/rosal/OneDrive/Escritorio/TFG/TFG_repository/TFG_repository/Web/tobillera_visualizador_calibrado.html -->
+<html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tobillera TFG</title>
+<style>
+  /* ── Tokens ── */
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --border:   #2a2d3a;
+    --accent:   #00d4a0;
+    --accent2:  #5b8fff;
+    --warn:     #ff6b6b;
+    --text:     #e8eaf0;
+    --muted:    #6b7080;
+    --mono:     'JetBrains Mono', 'Fira Mono', monospace;
+    --sans:     'Inter', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    width: 40px; height: 40px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+  h1 span { color: var(--accent); }
+
+  #estado-ble {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .dot.conectado { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .dot.grabando  { background: var(--warn);   box-shadow: 0 0 6px var(--warn); animation: pulso 1s infinite; }
+
+  @keyframes pulso { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Controles ── */
+  .controles {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+
+  button {
+    padding: 9px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; gap: 7px;
+  }
+
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0f1117;
+    font-weight: 600;
+  }
+  button.primary:hover:not(:disabled) { background: #00f0b8; color: #0f1117; }
+
+  button.danger { border-color: var(--warn); color: var(--warn); }
+  button.danger:hover:not(:disabled) { background: var(--warn); color: #fff; }
+
+  /* ── Stats rápidas ── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .stat-val   { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); }
+  .stat-unit  { font-size: 11px; color: var(--muted); margin-left: 3px; }
+
+  /* ── Log ── */
+  #log {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    height: 80px;
+    overflow-y: auto;
+    margin-bottom: 24px;
+  }
+
+  #log .ok   { color: var(--accent); }
+  #log .err  { color: var(--warn); }
+  #log .info { color: var(--accent2); }
+
+  /* ── Tabs pisadas ── */
+  #tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .tab {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab:hover  { border-color: var(--accent2); color: var(--accent2); }
+  .tab.active { background: var(--accent2); border-color: var(--accent2); color: #fff; font-weight: 600; }
+
+  /* ── Tabla de datos ── */
+  #tabla-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .tabla-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .tabla-header h2 { font-size: 14px; font-weight: 600; }
+  .duracion-badge {
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2px 10px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  thead th {
+    background: var(--bg);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  /* columnas de grupo */
+  thead tr:first-child th {
+    text-align: center;
+    border-bottom: none;
+    padding: 6px 12px 2px;
+    font-size: 10px;
+  }
+
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+
+  td { padding: 8px 12px; color: var(--text); white-space: nowrap; }
+
+  .pct-cell {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 13px;
+  }
+
+  .t-cell { color: var(--muted); }
+
+  .val-pos { color: #7dd3fc; }
+  .val-neg { color: #f9a8d4; }
+
+  /* grupos de columnas */
+  .sep { border-left: 1px solid var(--border) !important; }
+
+  /* ── Empty state ── */
+  #empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--muted);
+  }
+  #empty .big { font-size: 40px; margin-bottom: 12px; }
+  #empty p { font-size: 13px; line-height: 1.6; }
+
+  /* ── Exportar ── */
+  #btn-export { margin-top: 16px; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🦶</div>
+  <div>
+    <h1>Tobillera <span>TFG</span></h1>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px">Visualizador Web Bluetooth</div>
+  </div>
+  <div id="estado-ble">
+    <div class="dot " id="dot"></div>
+    <span id="estado-txt">Desconectado</span>
+  </div>
+</header>
+
+<div class="controles">
+  <button class="primary" id="btn-conectar">⚡ Conectar BLE</button>
+  <button id="btn-calibrar" disabled="">🎯 Calibrar</button>
+  <button id="btn-iniciar" disabled="">▶ Iniciar carrera</button>
+  <button id="btn-recibir" class="danger" disabled="">↓ Recibir datos</button>
+  <button id="btn-export">↓ Exportar CSV</button>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Pisadas</div>
+    <div><span class="stat-val" id="s-pisadas">0</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Última duración</div>
+    <div><span class="stat-val" id="s-duracion">—</span><span class="stat-unit">ms</span></div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Estado</div>
+    <div><span class="stat-val" id="s-estado" style="font-size:14px;color:var(--muted)">Desconectado</span></div>
+  </div>
+</div>
+
+<div id="log"><span class="info">▸ Abre Chrome, conecta el dispositivo y pulsa "Conectar BLE"</span><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="ok">▸ ✓ 0 pisadas recibidas</div><div class="err">▸ Dispositivo desconectado</div><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Pisada 1 — 37 ms</div><div class="info">▸ Pisada 2 — 45 ms</div><div class="info">▸ Pisada 3 — 50 ms</div><div class="info">▸ Pisada 4 — 71 ms</div><div class="info">▸ Pisada 5 — 50 ms</div><div class="info">▸ Pisada 6 — 61 ms</div><div class="info">▸ Pisada 7 — 79 ms</div><div class="info">▸ Pisada 8 — 84 ms</div><div class="ok">▸ ✓ 8 pisadas recibidas</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Pisada 1 — 9 ms</div><div class="info">▸ Pisada 2 — 16 ms</div><div class="ok">▸ ✓ 2 pisadas recibidas</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Pisada 1 — 23 ms</div><div class="info">▸ Pisada 2 — 47 ms</div><div class="info">▸ Pisada 3 — 78 ms</div><div class="info">▸ Pisada 4 — 41 ms</div><div class="info">▸ Pisada 5 — 83 ms</div><div class="info">▸ Pisada 6 — 76 ms</div><div class="info">▸ Pisada 7 — 80 ms</div><div class="info">▸ Pisada 8 — 84 ms</div><div class="ok">▸ ✓ 8 pisadas recibidas</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Pisada 1 — 89 ms</div><div class="info">▸ Pisada 2 — 10 ms</div><div class="info">▸ Pisada 3 — 51 ms</div><div class="info">▸ Pisada 4 — 300 ms</div><div class="info">▸ Pisada 5 — 176 ms</div><div class="info">▸ Pisada 6 — 43 ms</div><div class="info">▸ Pisada 7 — 114 ms</div><div class="info">▸ Pisada 8 — 208 ms</div><div class="ok">▸ ✓ 8 pisadas recibidas</div><div class="ok">▸ CSV exportado ✓</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Pisada 1 — 281 ms</div><div class="info">▸ Pisada 2 — 351 ms</div><div class="info">▸ Pisada 3 — 199 ms</div><div class="info">▸ Pisada 4 — 347 ms</div><div class="info">▸ Pisada 5 — 351 ms</div><div class="ok">▸ ✓ 5 pisadas recibidas</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Pisada 1 — 193 ms</div><div class="info">▸ Pisada 2 — 349 ms</div><div class="info">▸ Pisada 3 — 349 ms</div><div class="info">▸ Pisada 4 — 344 ms</div><div class="info">▸ Pisada 5 — 183 ms</div><div class="info">▸ Pisada 6 — 348 ms</div><div class="info">▸ Pisada 7 — 304 ms</div><div class="info">▸ Pisada 8 — 344 ms</div><div class="info">▸ Pisada 9 — 279 ms</div><div class="ok">▸ ✓ 9 pisadas recibidas</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="ok">▸ ✓ 0 pisadas recibidas</div><div class="info">▸ Recibiendo datos...</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="info">▸ Buscando dispositivo BLE...</div><div class="ok">▸ Conectado a Tobillera ✓</div><div class="ok">▸ Sesión iniciada — ¡a correr!</div><div class="ok">▸ Calibración recibida ✓</div><div class="info">▸ Recibiendo datos...</div><div class="info">▸ Pisada 1 — 333 ms</div><div class="info">▸ Pisada 2 — 346 ms</div><div class="info">▸ Pisada 3 — 348 ms</div><div class="info">▸ Pisada 4 — 355 ms</div><div class="info">▸ Pisada 5 — 261 ms</div><div class="ok">▸ ✓ 5 pisadas recibidas</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div><div class="err">▸ Dispositivo desconectado</div></div>
+
+<!-- Panel de calibración -->
+<div id="cal-panel" style="display: block; background: var(--color-background-secondary,#1a1d27); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px;">
+  <h3 style="font-size:13px; font-weight:600; color:var(--accent); margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+    🎯 Posición neutra calibrada
+  </h3>
+  <table style="width:100%; font-family:var(--mono); font-size:12px;">
+    <thead>
+      <tr style="color:var(--muted); border-bottom:1px solid var(--border);">
+        <th style="text-align:left; padding:6px 8px;">Sensor</th>
+        <th style="text-align:right; padding:6px 8px;">Roll (°)</th>
+        <th style="text-align:right; padding:6px 8px;">Pitch (°)</th>
+        <th style="text-align:right; padding:6px 8px;">Yaw (°)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding:6px 8px; color:var(--accent);">Astrágalo</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-roll-ast">-22.96</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-pitch-ast">2.59</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-yaw-ast">188.58</td>
+      </tr>
+      <tr>
+        <td style="padding:6px 8px; color:#fbbf24;">Metatarsiano</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-roll-meta">-11.61</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-pitch-meta">16.57</td>
+        <td style="text-align:right; padding:6px 8px;" id="cal-yaw-meta">177.64</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div id="tabs"><div class="tab">P1</div><div class="tab">P2</div><div class="tab">P3</div><div class="tab">P4</div><div class="tab active">P5</div></div>
+
+<div id="tabla-wrap">
+  <div id="empty" style="display: none;">
+    <div class="big">📡</div>
+    <p>Conecta la tobillera por BLE,<br>inicia la sesión y recibe los datos.</p>
+  </div>
+  <div id="tabla-contenido" style="display: block;">
+    <div class="tabla-header">
+      <h2 id="tabla-titulo">Pisada 5</h2>
+      <span class="duracion-badge" id="tabla-duracion">261 ms</span>
+    </div>
+    <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">%</th>
+          <th rowspan="2" class="sep">t (ms)</th>
+          <th colspan="3" class="sep" style="color:var(--accent)">Astrágalo — Velocidad (m/s)</th>
+          <th colspan="3" class="sep" style="color:var(--accent2)">Astrágalo — Ángulo (°)</th>
+          <th colspan="3" class="sep" style="color:#fbbf24">Metatarsiano — Velocidad (m/s)</th>
+          <th colspan="3" class="sep" style="color:#f472b6">Metatarsiano — Ángulo (°)</th>
+        </tr>
+        <tr>
+          <th class="sep">vX</th><th>vY</th><th>vZ</th>
+          <th class="sep">Roll</th><th>Pitch</th><th>Yaw</th>
+          <th class="sep">vX</th><th>vY</th><th>vZ</th>
+          <th class="sep">Roll</th><th>Pitch</th><th>Yaw</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"><tr>
+      <td class="pct-cell">0%</td>
+      <td class="t-cell sep">6</td>
+      <td class="sep val-neg">-0.01</td><td class=" val-neg">-0.09</td><td class=" val-neg">-0.04</td>
+      <td class="sep val-neg">-26.46</td><td class=" val-neg">-0.51</td><td class=" val-neg">-30.91</td>
+      <td class="sep val-neg">-0.02</td><td class=" val-neg">-0.02</td><td class=" val-neg">-0.02</td>
+      <td class="sep val-neg">-9.93</td><td class=" val-neg">-24.82</td><td class=" val-pos">0.75</td>
+    </tr><tr>
+      <td class="pct-cell">10%</td>
+      <td class="t-cell sep">26</td>
+      <td class="sep val-neg">-0.09</td><td class=" val-neg">-0.30</td><td class=" val-neg">-0.02</td>
+      <td class="sep val-neg">-26.64</td><td class=" val-neg">-3.44</td><td class=" val-neg">-31.69</td>
+      <td class="sep val-neg">-0.04</td><td class=" val-neg">-0.06</td><td class=" val-neg">-0.16</td>
+      <td class="sep val-neg">-6.64</td><td class=" val-neg">-29.52</td><td class=" val-pos">1.37</td>
+    </tr><tr>
+      <td class="pct-cell">20%</td>
+      <td class="t-cell sep">56</td>
+      <td class="sep val-neg">-0.08</td><td class=" val-neg">-0.77</td><td class=" val-neg">-0.02</td>
+      <td class="sep val-neg">-29.58</td><td class=" val-neg">-3.03</td><td class=" val-neg">-31.54</td>
+      <td class="sep val-pos">0.05</td><td class=" val-neg">-0.11</td><td class=" val-neg">-0.32</td>
+      <td class="sep val-neg">-6.72</td><td class=" val-neg">-32.02</td><td class=" val-pos">2.62</td>
+    </tr><tr>
+      <td class="pct-cell">27%</td>
+      <td class="t-cell sep">78</td>
+      <td class="sep val-neg">-0.15</td><td class=" val-neg">-1.16</td><td class=" val-neg">-0.06</td>
+      <td class="sep val-neg">-32.16</td><td class=" val-neg">-1.08</td><td class=" val-neg">-30.95</td>
+      <td class="sep val-pos">0.13</td><td class=" val-neg">-0.26</td><td class=" val-neg">-0.33</td>
+      <td class="sep val-neg">-7.44</td><td class=" val-neg">-32.71</td><td class=" val-pos">4.68</td>
+    </tr><tr>
+      <td class="pct-cell">35%</td>
+      <td class="t-cell sep">99</td>
+      <td class="sep val-neg">-0.22</td><td class=" val-neg">-1.55</td><td class=" val-neg">-0.07</td>
+      <td class="sep val-neg">-34.11</td><td class=" val-pos">2.11</td><td class=" val-neg">-30.11</td>
+      <td class="sep val-pos">0.24</td><td class=" val-neg">-0.38</td><td class=" val-neg">-0.36</td>
+      <td class="sep val-neg">-7.51</td><td class=" val-neg">-32.20</td><td class=" val-pos">6.05</td>
+    </tr><tr>
+      <td class="pct-cell">67%</td>
+      <td class="t-cell sep">180</td>
+      <td class="sep val-neg">-0.72</td><td class=" val-neg">-3.40</td><td class=" val-neg">-0.09</td>
+      <td class="sep val-neg">-40.42</td><td class=" val-pos">14.43</td><td class=" val-neg">-27.42</td>
+      <td class="sep val-pos">0.80</td><td class=" val-neg">-1.13</td><td class=" val-neg">-0.04</td>
+      <td class="sep val-neg">-8.84</td><td class=" val-neg">-28.41</td><td class=" val-pos">8.44</td>
+    </tr><tr>
+      <td class="pct-cell">92%</td>
+      <td class="t-cell sep">239</td>
+      <td class="sep val-neg">-1.21</td><td class=" val-neg">-4.54</td><td class=" val-neg">-0.10</td>
+      <td class="sep val-neg">-42.80</td><td class=" val-pos">25.17</td><td class=" val-neg">-28.47</td>
+      <td class="sep val-pos">1.05</td><td class=" val-neg">-1.61</td><td class=" val-neg">-0.14</td>
+      <td class="sep val-neg">-13.62</td><td class=" val-neg">-20.86</td><td class=" val-pos">3.88</td>
+    </tr><tr>
+      <td class="pct-cell">98%</td>
+      <td class="t-cell sep">261</td>
+      <td class="sep val-neg">-1.39</td><td class=" val-neg">-4.93</td><td class=" val-neg">-0.10</td>
+      <td class="sep val-neg">-43.96</td><td class=" val-pos">30.83</td><td class=" val-neg">-30.11</td>
+      <td class="sep val-pos">0.95</td><td class=" val-neg">-1.71</td><td class=" val-neg">-0.30</td>
+      <td class="sep val-neg">-16.77</td><td class=" val-neg">-10.66</td><td class=" val-pos">0.79</td>
+    </tr><tr>
+      <td class="pct-cell">100%</td>
+      <td class="t-cell sep">261</td>
+      <td class="sep val-neg">-1.39</td><td class=" val-neg">-4.93</td><td class=" val-neg">-0.10</td>
+      <td class="sep val-neg">-43.96</td><td class=" val-pos">30.83</td><td class=" val-neg">-30.11</td>
+      <td class="sep val-pos">0.95</td><td class=" val-neg">-1.71</td><td class=" val-neg">-0.30</td>
+      <td class="sep val-neg">-16.77</td><td class=" val-neg">-10.66</td><td class=" val-pos">0.79</td>
+    </tr></tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── UUIDs — deben coincidir con el código Arduino ──
+const SERVICE_UUID  = '19b10000-e8f2-537e-4f6c-d104768a1214';
+const PISADA_UUID   = '19b10001-e8f2-537e-4f6c-d104768a1214';
+const CMD_UUID      = '19b10002-e8f2-537e-4f6c-d104768a1214';
+
+// ── Porcentajes de los 9 instantes ──
+const INSTANTES = [0, 10, 20, 27, 35, 67, 92, 98, 100];
+const NUM_INSTANTES = 9;
+
+// ── Estado global ──
+let device, pisadaChar, cmdChar;
+let pisadas = [];         // array de pisadas recibidas
+let pisadaActual = null;  // pisada que se está recibiendo
+let pisadaSeleccionada = 0;
+
+// ── Log ──
+function log(msg, tipo = '') {
+  const d = document.getElementById('log');
+  d.innerHTML += `<div class="${tipo}">▸ ${msg}</div>`;
+  d.scrollTop = d.scrollHeight;
+}
+
+// ── Estado BLE visual ──
+function setEstado(txt, tipo) {
+  document.getElementById('estado-txt').textContent = txt;
+  document.getElementById('s-estado').textContent   = txt;
+  const dot = document.getElementById('dot');
+  dot.className = 'dot ' + (tipo || '');
+}
+
+// ── Conectar BLE ──
+document.getElementById('btn-conectar').addEventListener('click', async () => {
+  try {
+    log('Buscando dispositivo BLE...', 'info');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'Tobillera' }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    pisadaChar    = await service.getCharacteristic(PISADA_UUID);
+    cmdChar       = await service.getCharacteristic(CMD_UUID);
+
+    await pisadaChar.startNotifications();
+    pisadaChar.addEventListener('characteristicvaluechanged', recibirDatos);
+
+    setEstado('Conectado', 'conectado');
+    log('Conectado a Tobillera ✓', 'ok');
+
+    // Tras conectar se puede calibrar (sesión nueva) o recibir (vuelves de correr)
+    document.getElementById('btn-calibrar').disabled = false;
+    document.getElementById('btn-recibir').disabled  = false;
+    document.getElementById('btn-conectar').disabled = true;
+
+    device.addEventListener('gattserverdisconnected', () => {
+      setEstado('Desconectado', '');
+      log('Desconectado (reconecta al volver de correr para descargar)', 'err');
+      document.getElementById('btn-conectar').disabled = false;
+      document.getElementById('btn-calibrar').disabled = true;
+      document.getElementById('btn-iniciar').disabled  = true;
+      document.getElementById('btn-recibir').disabled  = true;
+    });
+
+  } catch(e) {
+    log('Error al conectar: ' + e.message, 'err');
+  }
+});
+
+// ── Calibrar (0x01) — pie quieto 5 s ──
+document.getElementById('btn-calibrar').addEventListener('click', async () => {
+  try {
+    await cmdChar.writeValue(new Uint8Array([0x01]));
+    pisadas = [];          // nueva sesión: limpiar lo anterior
+    pisadaActual = null;
+    setEstado('Calibrando', 'grabando');
+    log('Calibrando — mantén el pie QUIETO 5 s...', 'info');
+    document.getElementById('btn-calibrar').disabled = true;
+  } catch(e) {
+    log('Error al calibrar: ' + e.message, 'err');
+  }
+});
+
+// ── Iniciar carrera (0x03) — la persona ya puede alejarse ──
+document.getElementById('btn-iniciar').addEventListener('click', async () => {
+  try {
+    await cmdChar.writeValue(new Uint8Array([0x03]));
+    setEstado('Grabando', 'grabando');
+    log('¡A correr! Puedes alejarte; para sola tras 14 pisadas.', 'ok');
+    document.getElementById('btn-iniciar').disabled = true;
+  } catch(e) {
+    log('Error al iniciar: ' + e.message, 'err');
+  }
+});
+
+// ── Recibir datos (0x02) — al volver y reconectar ──
+document.getElementById('btn-recibir').addEventListener('click', async () => {
+  try {
+    await cmdChar.writeValue(new Uint8Array([0x02]));
+    setEstado('Recibiendo', 'conectado');
+    log('Recibiendo datos...', 'info');
+    document.getElementById('btn-recibir').disabled = true;
+  } catch(e) {
+    log('Error al recibir: ' + e.message, 'err');
+  }
+});
+
+// ── Recibir datos BLE ──
+function recibirDatos(event) {
+  const data = event.target.value;
+  console.log(`Paquete: ${data.byteLength} bytes`);
+
+  // Marcador de CALIBRACION — 13 bytes empezando por 0xCA
+  if (data.byteLength === 13 && data.getUint8(0) === 0xCA) {
+    const rollAst  = data.getInt16(1,  true) / 100;
+    const pitchAst = data.getInt16(3,  true) / 100;
+    const yawAst   = data.getInt16(5,  true) / 100;
+    const rollMeta = data.getInt16(7,  true) / 100;
+    const pitchMeta = data.getInt16(9,  true) / 100;
+    const yawMeta  = data.getInt16(11, true) / 100;
+
+    document.getElementById('cal-panel').style.display = 'block';
+    document.getElementById('cal-roll-ast').textContent  = rollAst.toFixed(2);
+    document.getElementById('cal-pitch-ast').textContent = pitchAst.toFixed(2);
+    document.getElementById('cal-yaw-ast').textContent   = yawAst.toFixed(2);
+    document.getElementById('cal-roll-meta').textContent  = rollMeta.toFixed(2);
+    document.getElementById('cal-pitch-meta').textContent = pitchMeta.toFixed(2);
+    document.getElementById('cal-yaw-meta').textContent   = yawMeta.toFixed(2);
+
+    log('Calibración recibida ✓ — pulsa "Iniciar carrera"', 'ok');
+    document.getElementById('btn-iniciar').disabled = false;
+    return;
+  }
+
+  // Marcador de fin de sesión — 1 solo byte 0xFE
+  if (data.byteLength === 1 && data.getUint8(0) === 0xFE) {
+    log(`✓ ${pisadas.length} pisadas recibidas`, 'ok');
+    setEstado('Listo', 'conectado');
+    document.getElementById('btn-iniciar').disabled = false;
+    document.getElementById('btn-export').disabled  = false;
+    if (pisadas.length > 0) mostrarPisada(pisadas.length - 1);
+    return;
+  }
+
+  // Paquete de muestra — 27 bytes = indice (1 byte) + un instante (26 bytes)
+  if (data.byteLength === 27) {
+    const view = new DataView(data.buffer);
+    const idx  = view.getUint8(0);
+
+    if (idx === 0) {
+      // Llega el instante 0%: empieza una pisada nueva. Si habia una a
+      // medias, es que se perdio algun paquete BLE por el camino: se descarta
+      // en vez de dejar que sus datos se mezclen con esta.
+      if (pisadaActual !== null && pisadaActual.instantes.length > 0) {
+        log(`⚠ Pisada incompleta descartada (${pisadaActual.instantes.length}/${NUM_INSTANTES} instantes, faltó algún paquete BLE)`, 'err');
+      }
+      pisadaActual = { instantes: [], duracion_ms: 0 };
+    } else if (pisadaActual === null || idx !== pisadaActual.instantes.length) {
+      // Paquete fuera de secuencia (idx no es el que tocaba): se perdió algo,
+      // descartamos lo que llevábamos y esperamos al próximo instante 0%.
+      log(`⚠ Paquete BLE fuera de secuencia (idx=${idx}), pisada descartada`, 'err');
+      pisadaActual = null;
+      return;
+    }
+
+    const m = {
+      velX1:  view.getInt16(1,  true) / 100,
+      velY1:  view.getInt16(3,  true) / 100,
+      velZ1:  view.getInt16(5,  true) / 100,
+      roll1:  view.getInt16(7,  true) / 100,
+      pitch1: view.getInt16(9,  true) / 100,
+      yaw1:   view.getInt16(11, true) / 100,
+      velX2:  view.getInt16(13, true) / 100,
+      velY2:  view.getInt16(15, true) / 100,
+      velZ2:  view.getInt16(17, true) / 100,
+      roll2:  view.getInt16(19, true) / 100,
+      pitch2: view.getInt16(21, true) / 100,
+      yaw2:   view.getInt16(23, true) / 100,
+      t_ms:   view.getUint16(25, true)
+    };
+
+    pisadaActual.instantes.push(m);
+
+    // Cuando llegan los 9 instantes, la pisada está completa
+    if (pisadaActual.instantes.length >= NUM_INSTANTES) {
+      // La duración = t_ms del último instante (100%)
+      pisadaActual.duracion_ms = m.t_ms;
+      pisadas.push({ ...pisadaActual });
+      log(`Pisada ${pisadas.length} — ${m.t_ms} ms`, 'info');
+
+      pisadaActual = null;
+
+      actualizarTabs();
+      mostrarPisada(pisadas.length - 1);
+    }
+  }
+}
+
+// ── Formatear valor con color ──
+function fmtVal(v, cls) {
+  const color = v > 0 ? 'val-pos' : v < 0 ? 'val-neg' : '';
+  return `<td class="${cls || ''} ${color}">${v.toFixed(2)}</td>`;
+}
+
+// ── Mostrar pisada en la tabla ──
+function mostrarPisada(idx) {
+  if (idx < 0 || idx >= pisadas.length) return;
+  pisadaSeleccionada = idx;
+  const p = pisadas[idx];
+
+  document.getElementById('empty').style.display           = 'none';
+  document.getElementById('tabla-contenido').style.display = 'block';
+  document.getElementById('tabla-titulo').textContent      = `Pisada ${idx + 1}`;
+  document.getElementById('tabla-duracion').textContent    = `${p.duracion_ms} ms`;
+
+  // Actualizar tabs activo
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', i === idx);
+  });
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+
+  p.instantes.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="pct-cell">${INSTANTES[i]}%</td>
+      <td class="t-cell sep">${m.t_ms}</td>
+      ${fmtVal(m.velX1,'sep')}${fmtVal(m.velY1)}${fmtVal(m.velZ1)}
+      ${fmtVal(m.roll1,'sep')}${fmtVal(m.pitch1)}${fmtVal(m.yaw1)}
+      ${fmtVal(m.velX2,'sep')}${fmtVal(m.velY2)}${fmtVal(m.velZ2)}
+      ${fmtVal(m.roll2,'sep')}${fmtVal(m.pitch2)}${fmtVal(m.yaw2)}
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ── Actualizar tabs ──
+function actualizarTabs() {
+  const cont = document.getElementById('tabs');
+  cont.innerHTML = '';
+  pisadas.forEach((_, i) => {
+    const b = document.createElement('div');
+    b.className = 'tab' + (i === pisadaSeleccionada ? ' active' : '');
+    b.textContent = `P${i + 1}`;
+    b.addEventListener('click', () => mostrarPisada(i));
+    cont.appendChild(b);
+  });
+}
+
+// ── Exportar CSV ──
+document.getElementById('btn-export').addEventListener('click', () => {
+  let csv = 'Pisada,Instante_%,t_ms,vX1,vY1,vZ1,Roll1,Pitch1,Yaw1,vX2,vY2,vZ2,Roll2,Pitch2,Yaw2,Duracion_ms\n';
+
+  pisadas.forEach((p, pi) => {
+    p.instantes.forEach((m, i) => {
+      csv += [
+        pi + 1, INSTANTES[i], m.t_ms,
+        m.velX1, m.velY1, m.velZ1,
+        m.roll1, m.pitch1, m.yaw1,
+        m.velX2, m.velY2, m.velZ2,
+        m.roll2, m.pitch2, m.yaw2,
+        p.duracion_ms
+      ].join(',') + '\n';
+    });
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'tobillera_sesion.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('CSV exportado ✓', 'ok');
+});
+</script>
+
+
+</body></html>
