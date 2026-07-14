@@ -1,3 +1,4 @@
+
 // ============================================================
 // TOBILLERA TFG — AVGS + Calibracion estatica
 //
@@ -13,11 +14,16 @@
 //
 // Deteccion por giroscopio (metodo AVGS)
 //  Angular Velocity-based Gait Segmentation
-// Se divide en tres fases la pisada: 
+// Se divide en tres fases la pisada:
 // 1. vuelo: pico grande de rotacion: hacia delante
 // 2. Contacto: la señal cae bruscamente cuando el pie impacta en el suelo
-// 3. Apoyo: señal estable cerca de cero 
-// 4. Despegue: el pie vuelve a rotar- la velocidad sube  
+// 3. Apoyo: señal estable cerca de cero
+// 4. Despegue: el pie vuelve a rotar- la velocidad sube
+//
+// Deteccion afinada (Ruiz-Ruiz et al.): en vez del modulo del giroscopio
+// se usa unicamente gy1 (eje Y del astragalo), con deteccion de pico local
+// para el MSW, cruce por cero + pico de aceleracion (fusion) para el IC,
+// e inflexion (minimo local seguido de subida) para el despegue
 
 // Se calculan los angulos utilizando los algoritmos de madgwick que integra la vel angular(lo que da la imu) para calcular angulos
 // Estos filtros s etienen que llmaar constantemente para que no pierdan la referencia, como los gps 
@@ -44,12 +50,19 @@
 #define NUM_INSTANTES    9
 #define UMBRAL_RUIDO     0.04f
 
-// --- Deteccion por giroscopio (metodo AVGS) ---
-#define UMBRAL_MSW_DPS       190.0f // velocidad angular durante vuelo
-//#define UMBRAL_APOYO_DPS     100.0f // cae y empieza a poyar 
+// --- Deteccion por giroscopio (metodo AVGS, eje Y unicamente) ---
+#define UMBRAL_MSW_DPS       190.0f // altura minima del pico de gy1 durante el vuelo
 #define DURACION_MINIMA_MS   150// descarta pisadas inferiores a 150ms: 6.67 Hz de zancada
-#define DURACION_MAXIMA_MS   500 
+#define DURACION_MAXIMA_MS   500
 #define BLOQUEO_MS           100 //evita oscilaciones 100ms despues de una pisada (filtra)
+
+#define UMBRAL_IMPACTO_G     1.15f // pico de |accel| del astragalo que confirma el impacto (g)
+                                    // calibrado con datos reales: reposo/ruido ~1.02-1.10g, impacto ~1.20-1.27g
+#define VENTANA_IMPACTO_MS   50    // ventana (antes O despues del cruce por cero) para confirmar el IC
+#define UMBRAL_DESPEGUE_DPS  80.0f // subida de gy1 desde su minimo en apoyo que marca el despegue
+
+// --- Envio BLE ---
+#define BLE_DELAY_MS 70 // margen entre notificaciones para que el central no pierda paquetes
 
 // --- Calibracion estatica ---
 #define TIEMPO_CALIBRACION_MS   5000    // 5 segundos quieto
@@ -101,10 +114,18 @@ enum EstadoPisada {
     EN_APOYO
 };
 
-EstadoPisada estado = ESPERANDO_MSW; // se empieza esperando un cambio en el giroscopio 
+EstadoPisada estado = ESPERANDO_MSW; // se empieza esperando un cambio en el giroscopio
 uint32_t inicioPisada = 0;
 uint32_t finPisadaMs  = 0;
+float gy1Anterior = 0;
 
+// --- Estado auxiliar para la deteccion afinada en gy1 ---
+bool     ascendiendoMSW  = false; // gy1 esta subiendo -> buscando el pico del vuelo
+bool     descendiendoApoyo = false; // gy1 esta bajando dentro del apoyo -> buscando el minimo
+float    gy1Min          = 0;     // minimo local de gy1 durante el apoyo (para detectar el despegue)
+uint32_t ultimoImpactoMs = 0;     // marca temporal del ultimo pico de aceleracion (confirmacion del IC)
+bool     cruceCeroPendiente = false; // ya vimos el cruce por cero, esperando confirmar con el impacto
+uint32_t crucePendienteMs   = 0;     // instante en que se vio ese cruce
 
 struct EstadoIMU {
     float velX = 0, velY = 0, velZ = 0;
@@ -202,7 +223,7 @@ void enviarPisadaBLE(uint8_t idx) {
         memcpy(buf + 22, &m.posZ2, 2);
         memcpy(buf + 24, &m.t_ms,  2);
         pisadaChar.writeValue(buf, 26);
-        delay(30);
+        delay(BLE_DELAY_MS);
     }
 }
 
@@ -357,7 +378,7 @@ void calibrarPosicionNeutra() {
     v = (int16_t)(pitchOffMeta * 100.0f); memcpy(bufCal + 9, &v, 2);
     v = (int16_t)(yawOffMeta   * 100.0f); memcpy(bufCal + 11, &v, 2);
     pisadaChar.writeValue(bufCal, 13);
-    delay(50);
+    delay(BLE_DELAY_MS * 2);
 
     calibrado = true;
 }
@@ -464,18 +485,19 @@ void loop() {
                 for (uint8_t i = inicio; i < fin_idx; i++) {
                     enviarPisadaBLE(i);
                     mostrarPisadaSerial(i);
-                    delay(50);
+                    delay(BLE_DELAY_MS);
                 }
-                delay(100);
+                delay(BLE_DELAY_MS * 2);
                 uint8_t fin[1] = {0xFE};
                 pisadaChar.writeValue(fin, 1);
+                delay(BLE_DELAY_MS);
                 Serial.println("Listo");
             }
         }
 
         if (!sesionActiva) continue;
         // AUTO-STOP a los 10 segundos
-        if (millis() - inicioSesionMs > 10000) {
+        if (millis() - inicioSesionMs > 15000) {
             Serial.println();
             Serial.println("Auto-stop a los 10 segundos");
             sesionActiva = false;
@@ -505,20 +527,20 @@ void loop() {
             for (uint8_t i = inicio; i < fin_idx; i++) {
                 enviarPisadaBLE(i);
                 mostrarPisadaSerial(i);
-                delay(50);
+                delay(BLE_DELAY_MS);
             }
 
-            delay(100);
+            delay(BLE_DELAY_MS * 2);
             uint8_t fin[1] = {0xFE};
             pisadaChar.writeValue(fin, 1);
+            delay(BLE_DELAY_MS);
             Serial.println("Listo");
             continue;
         }
 
         // Control 100Hz
         static unsigned long ultimaMuestra = 0;
-        // DECLARACIÓN de la variable anterior: debe ser static para que conserve su valor entre ciclos del loop
-        static float gy1_Anterior = 0.0f;
+        //static float gy1_Anterior = 0.0f;
 
         unsigned long ahora = micros();
         if (ahora - ultimaMuestra < INTERVALO_US) continue;
@@ -543,44 +565,71 @@ void loop() {
         float gz2 = gyro2.gyro.z * 180.0f / PI;
 
         // ============================================================
-        // METODO AVGS — Deteccion por giroscopio del astragalo
+        // METODO AVGS — Deteccion por giroscopio del astragalo (solo gy1)
         // ============================================================
-        
-
         switch (estado) {
 
-            // ESPERANDO_MSW (Mid-Swing): El pie vuela hacia adelante. 
-            // Buscamos el PICO MÁXIMO de rotación.
+            // Buscando el balanceo (MSW): pico local maximo de gy1.
+            // Mientras la señal sube nos limitamos a marcarlo; en el instante
+            // en que empieza a bajar, la muestra anterior fue el pico.
             case ESPERANDO_MSW:
-                // Condición: La señal estaba por encima del umbral, pero el valor actual 
-                // es menor que el anterior (es decir, acabamos de pasar la cima del pico).
-                if (gy1_Anterior > UMBRAL_MSW_DPS && gy1 < gy1_Anterior 
-                    && (millis() - finPisadaMs) > BLOQUEO_MS) {
-                    estado = ESPERANDO_IC;
+                if (gy1 > gy1Anterior) {
+                    ascendiendoMSW = true;
+                } else {
+                    if (ascendiendoMSW && gy1Anterior > UMBRAL_MSW_DPS
+                        && (millis() - finPisadaMs) > BLOQUEO_MS) {
+                        estado = ESPERANDO_IC;
+                        ultimoImpactoMs = 0;       // descarta impactos de zancadas anteriores
+                        cruceCeroPendiente = false;
+                    }
+                    ascendiendoMSW = false;
                 }
                 break;
 
-            // ESPERANDO_IC (Initial Contact): El pie va a golpear el suelo.
-            // Buscamos el CRUCE POR CERO de la velocidad angular.
-            case ESPERANDO_IC:
-                // Condición: La señal anterior era positiva (o 0) y la actual es negativa.
-                // Esto marca el instante exacto en que la rotación se invierte por el impacto.
-                if (gy1_Anterior >= 0.0f && gy1 < 0.0f && numPisadas < MAX_PISADAS) {
-                    estado = EN_APOYO;
-                    inicioPisada = millis();
-                    sesion[numPisadas].numMuestras = 0;
-                    resetEstado(estadoAst);
-                    resetEstado(estadoMeta);
-                    // IMPORTANTE: NO reiniciar Madgwick aqui,
-                    // sino se perderia la calibracion
-                    Serial.print("Pisada "); Serial.println(numPisadas + 1);
+            // Detectando el impacto (IC): fusion cinematica + cinetica.
+            //  - Cinematica: gy1 cruza por cero de positivo a negativo.
+            //  - Cinetica:   pico de aceleracion en el astragalo (el choque), que en la
+            //    practica llega unos ms DESPUES del cruce por cero, no antes: por eso
+            //    el cruce se guarda como "pendiente" y se confirma en una ventana que
+            //    mira hacia adelante y hacia atras.
+            case ESPERANDO_IC: {
+                float accMag1 = sqrt(ax1*ax1 + ay1*ay1 + az1*az1);
+                if (accMag1 > UMBRAL_IMPACTO_G) {
+                    ultimoImpactoMs = millis();
+                }
+
+                bool cruceCero = (gy1Anterior > 0 && gy1 <= 0);
+                if (cruceCero) {
+                    cruceCeroPendiente = true;
+                    crucePendienteMs = millis();
+                }
+
+                if (cruceCeroPendiente) {
+                    bool impactoEnVentana = (millis() - ultimoImpactoMs) < VENTANA_IMPACTO_MS;
+                    bool ventanaExpirada  = (millis() - crucePendienteMs) > VENTANA_IMPACTO_MS;
+
+                    if (impactoEnVentana && numPisadas < MAX_PISADAS) {
+                        estado = EN_APOYO;
+                        inicioPisada = millis();
+                        sesion[numPisadas].numMuestras = 0;
+                        resetEstado(estadoAst);
+                        resetEstado(estadoMeta);
+                        descendiendoApoyo = false;
+                        gy1Min = gy1;
+                        cruceCeroPendiente = false;
+                        // IMPORTANTE: NO reiniciar Madgwick aqui,
+                        // sino se perderia la calibracion
+                        Serial.print("Pisada "); Serial.println(numPisadas + 1);
+                    } else if (ventanaExpirada) {
+                        cruceCeroPendiente = false; // este cruce no se confirmo, esperar el siguiente
+                    }
                 }
                 break;
+            }
 
-            // EN_APOYO: El pie está en el suelo.
-            // Buscamos el TC (Terminal Contact / Despegue)
             case EN_APOYO:
                 // Actualizar con offsets de calibracion aplicados
+                //Calcula y guarda cada 10 ms la velocidad y anfulos
                 actualizarEstado(estadoAst,  filtroAst,
                                  ax1, ay1, az1, gx1, gy1, gz1,
                                  rollOffAst, pitchOffAst, yawOffAst);
@@ -606,16 +655,20 @@ void loop() {
                         m.posZ2 = toInt16Ang(estadoMeta.yaw);
                         m.t_ms  = (uint16_t)(millis() - inicioPisada);
                     }
-                    
+                    //deteccion del despegue (Terminal Contact): inflexion de gy1
+                    //(minimo local durante el apoyo, seguido de una subida clara),
+                    //o timeout de seguridad si el algoritmo no encuentra la inflexion
                     uint32_t duracion = millis() - inicioPisada;
 
-                    // Detección del final de pisada (Toe-Off):
-                    // El despegue genera una fuerte aceleración rotacional positiva de nuevo.
-                    // Mantenemos tu idea del "cambio brusco", pero aplicada solo al eje Y.
-                    bool cambioBrusco = (gy1 - gy1_Anterior) > 50.0f;
+                    if (gy1 < gy1Min) {
+                        gy1Min = gy1;
+                        descendiendoApoyo = true;
+                    }
+                    bool inflexionDespegue = descendiendoApoyo
+                                              && (gy1 - gy1Min) > UMBRAL_DESPEGUE_DPS;
 
                     if (duracion > DURACION_MINIMA_MS &&
-                        (cambioBrusco || duracion > DURACION_MAXIMA_MS)) {
+                        (inflexionDespegue || duracion > DURACION_MAXIMA_MS)) {
 
                         if (p.numMuestras >= NUM_INSTANTES) {
                             p.duracion_ms = (uint16_t)duracion;
@@ -633,16 +686,14 @@ void loop() {
                 break;
         }
 
-        // ============================================================
-        // ACTUALIZAR VALORES ANTERIORES PARA EL SIGUIENTE CICLO
-        // ============================================================
-        gy1_Anterior = gy1;
+        gy1Anterior = gy1;
 
         // Mantener filtros Madgwick actualizados incluso fuera del apoyo
         // (importante para no perder la referencia)
         if (estado != EN_APOYO) {
             filtroAst.updateIMU(gx1, gy1, gz1, ax1, ay1, az1);
-            filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);}
+            filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);
+        }
     }
 
     Serial.println("BLE desconectado");
