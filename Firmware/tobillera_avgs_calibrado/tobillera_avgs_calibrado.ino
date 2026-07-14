@@ -45,8 +45,8 @@
 #define UMBRAL_RUIDO     0.04f
 
 // --- Deteccion por giroscopio (metodo AVGS) ---
-#define UMBRAL_MSW_DPS       250.0f // velocidad angular durante vuelo
-#define UMBRAL_APOYO_DPS     100.0f // cae y empieza a poyar 
+#define UMBRAL_MSW_DPS       190.0f // velocidad angular durante vuelo
+//#define UMBRAL_APOYO_DPS     100.0f // cae y empieza a poyar 
 #define DURACION_MINIMA_MS   150// descarta pisadas inferiores a 150ms: 6.67 Hz de zancada
 #define DURACION_MAXIMA_MS   500 
 #define BLOQUEO_MS           100 //evita oscilaciones 100ms despues de una pisada (filtra)
@@ -104,7 +104,7 @@ enum EstadoPisada {
 EstadoPisada estado = ESPERANDO_MSW; // se empieza esperando un cambio en el giroscopio 
 uint32_t inicioPisada = 0;
 uint32_t finPisadaMs  = 0;
-float gyroMagAnterior = 0;
+
 
 struct EstadoIMU {
     float velX = 0, velY = 0, velZ = 0;
@@ -475,7 +475,7 @@ void loop() {
 
         if (!sesionActiva) continue;
         // AUTO-STOP a los 10 segundos
-        if (millis() - inicioSesionMs > 15000) {
+        if (millis() - inicioSesionMs > 10000) {
             Serial.println();
             Serial.println("Auto-stop a los 10 segundos");
             sesionActiva = false;
@@ -517,6 +517,9 @@ void loop() {
 
         // Control 100Hz
         static unsigned long ultimaMuestra = 0;
+        // DECLARACIÓN de la variable anterior: debe ser static para que conserve su valor entre ciclos del loop
+        static float gy1_Anterior = 0.0f;
+
         unsigned long ahora = micros();
         if (ahora - ultimaMuestra < INTERVALO_US) continue;
         ultimaMuestra = ahora;
@@ -542,23 +545,27 @@ void loop() {
         // ============================================================
         // METODO AVGS — Deteccion por giroscopio del astragalo
         // ============================================================
-        float gyroMag = sqrt(gx1*gx1 + gy1*gy1 + gz1*gz1);
+        
 
         switch (estado) {
 
-            //el pie va hacia delante, gyro mas grande que el umbral o no ha pasdo suficiente tiempo desde la anterior zancada
+            // ESPERANDO_MSW (Mid-Swing): El pie vuela hacia adelante. 
+            // Buscamos el PICO MÁXIMO de rotación.
             case ESPERANDO_MSW:
-                if (gyroMag > UMBRAL_MSW_DPS
+                // Condición: La señal estaba por encima del umbral, pero el valor actual 
+                // es menor que el anterior (es decir, acabamos de pasar la cima del pico).
+                if (gy1_Anterior > UMBRAL_MSW_DPS && gy1 < gy1_Anterior 
                     && (millis() - finPisadaMs) > BLOQUEO_MS) {
                     estado = ESPERANDO_IC;
                 }
                 break;
 
-            //se prepara para el impacto
+            // ESPERANDO_IC (Initial Contact): El pie va a golpear el suelo.
+            // Buscamos el CRUCE POR CERO de la velocidad angular.
             case ESPERANDO_IC:
-            // comprueba estar por debajo del limite y un cambio con la anterior 
-                if (gyroMag < UMBRAL_APOYO_DPS && gyroMagAnterior >= UMBRAL_APOYO_DPS
-                    && numPisadas < MAX_PISADAS) {
+                // Condición: La señal anterior era positiva (o 0) y la actual es negativa.
+                // Esto marca el instante exacto en que la rotación se invierte por el impacto.
+                if (gy1_Anterior >= 0.0f && gy1 < 0.0f && numPisadas < MAX_PISADAS) {
                     estado = EN_APOYO;
                     inicioPisada = millis();
                     sesion[numPisadas].numMuestras = 0;
@@ -570,9 +577,10 @@ void loop() {
                 }
                 break;
 
+            // EN_APOYO: El pie está en el suelo.
+            // Buscamos el TC (Terminal Contact / Despegue)
             case EN_APOYO:
                 // Actualizar con offsets de calibracion aplicados
-                //Calcula y guarda cada 10 ms la velocidad y anfulos
                 actualizarEstado(estadoAst,  filtroAst,
                                  ax1, ay1, az1, gx1, gy1, gz1,
                                  rollOffAst, pitchOffAst, yawOffAst);
@@ -598,11 +606,13 @@ void loop() {
                         m.posZ2 = toInt16Ang(estadoMeta.yaw);
                         m.t_ms  = (uint16_t)(millis() - inicioPisada);
                     }
-                    //deteccion del final de pisada, detecta un cambio brusco mayor a 150ms o se fuerza a los 500 ms
+                    
                     uint32_t duracion = millis() - inicioPisada;
 
-                    bool cambioBrusco = (gyroMag - gyroMagAnterior) > 50.0f
-                                        && gyroMag > UMBRAL_APOYO_DPS;
+                    // Detección del final de pisada (Toe-Off):
+                    // El despegue genera una fuerte aceleración rotacional positiva de nuevo.
+                    // Mantenemos tu idea del "cambio brusco", pero aplicada solo al eje Y.
+                    bool cambioBrusco = (gy1 - gy1_Anterior) > 50.0f;
 
                     if (duracion > DURACION_MINIMA_MS &&
                         (cambioBrusco || duracion > DURACION_MAXIMA_MS)) {
@@ -623,14 +633,16 @@ void loop() {
                 break;
         }
 
-        gyroMagAnterior = gyroMag;
+        // ============================================================
+        // ACTUALIZAR VALORES ANTERIORES PARA EL SIGUIENTE CICLO
+        // ============================================================
+        gy1_Anterior = gy1;
 
         // Mantener filtros Madgwick actualizados incluso fuera del apoyo
         // (importante para no perder la referencia)
         if (estado != EN_APOYO) {
             filtroAst.updateIMU(gx1, gy1, gz1, ax1, ay1, az1);
-            filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);
-        }
+            filtroMeta.updateIMU(gx2, gy2, gz2, ax2, ay2, az2);}
     }
 
     Serial.println("BLE desconectado");
