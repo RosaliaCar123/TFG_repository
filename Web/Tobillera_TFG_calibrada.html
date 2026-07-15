@@ -274,6 +274,7 @@
   <button id="btn-iniciar" disabled="">▶ Iniciar carrera</button>
   <button id="btn-recibir" class="danger" disabled="">↓ Recibir datos</button>
   <button id="btn-export">↓ Exportar CSV</button>
+  <button id="btn-export-diag">↓ Exportar diagnóstico</button>
 </div>
 
 <div class="stats">
@@ -438,6 +439,7 @@ let device, pisadaChar, cmdChar;
 let pisadas = [];         // array de pisadas recibidas
 let pisadaActual = null;  // pisada que se está recibiendo
 let pisadaSeleccionada = 0;
+let diagnosticos = [];    // diagnostico en vivo por pisada (hueco/causa/pico/valle)
 
 // ── Log ──
 function log(msg, tipo = '') {
@@ -499,6 +501,7 @@ document.getElementById('btn-calibrar').addEventListener('click', async () => {
     await cmdChar.writeValue(new Uint8Array([0x01]));
     pisadas = [];          // nueva sesión: limpiar lo anterior
     pisadaActual = null;
+    diagnosticos = [];
     setEstado('Calibrando', 'grabando');
     log('Calibrando — mantén el pie QUIETO 5 s...', 'info');
     document.getElementById('btn-calibrar').disabled = true;
@@ -535,6 +538,26 @@ document.getElementById('btn-recibir').addEventListener('click', async () => {
 function recibirDatos(event) {
   const data = event.target.value;
   console.log(`Paquete: ${data.byteLength} bytes`);
+
+  // Marcador de DIAGNOSTICO — 11 bytes empezando por 0xD1
+  // Se recibe al pulsar "Recibir datos", uno por cada pisada capturada
+  // (buena o descartada) de la sesion completa — no depende de haber
+  // llevado nada conectado durante la carrera.
+  if (data.byteLength === 11 && data.getUint8(0) === 0xD1) {
+    const d = {
+      pisada:    data.getUint8(1),
+      timeout:   data.getUint8(2) === 1,
+      duracion:  data.getUint16(3, true),
+      picoMSW:   data.getInt16(5, true) / 10,
+      gy1Min:    data.getInt16(7, true) / 10,
+      hueco:     data.getUint16(9, true),
+    };
+    diagnosticos.push(d);
+    const causa = d.timeout ? 'TIMEOUT' : 'INFLEXION';
+    const tipo  = d.timeout ? 'err' : 'info';
+    log(`Pisada ${d.pisada} | duracion=${d.duracion}ms | causa=${causa} | pico MSW=${d.picoMSW.toFixed(1)} dps | valle=${d.gy1Min.toFixed(1)} dps | hueco=${d.hueco}ms`, tipo);
+    return;
+  }
 
   // Marcador de CALIBRACION — 13 bytes empezando por 0xCA
   if (data.byteLength === 13 && data.getUint8(0) === 0xCA) {
@@ -699,6 +722,27 @@ document.getElementById('btn-export').addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
   log('CSV exportado ✓', 'ok');
+});
+
+// ── Exportar diagnóstico (hueco/causa/pico/valle por pisada) ──
+document.getElementById('btn-export-diag').addEventListener('click', () => {
+  let csv = 'Pisada,Duracion_ms,Causa,PicoMSW_dps,Gy1Min_dps,Hueco_ms\n';
+
+  diagnosticos.forEach(d => {
+    csv += [
+      d.pisada, d.duracion, d.timeout ? 'TIMEOUT' : 'INFLEXION',
+      d.picoMSW, d.gy1Min, d.hueco
+    ].join(',') + '\n';
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'tobillera_diagnostico.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  log('Diagnóstico exportado ✓', 'ok');
 });
 </script>
 

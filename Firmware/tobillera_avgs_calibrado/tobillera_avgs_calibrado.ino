@@ -9,11 +9,12 @@
 //   3. El micro NO empieza aun: espera una segunda señal INICIAR (0x03)
 //   4. Tras INICIAR, la persona corre y puede alejarse todo lo que quiera:
 //      la deteccion y el almacenamiento siguen aunque se pierda el BLE
-//   5. Se almacenan los 9 instantes de cada pisada hasta detectar 14
-//      (las 2 primeras y las 2 ultimas se descartan -> 10 validas)
-//   6. Al llegar a 14 pisadas se DETIENE el almacenamiento (LED fijo)
+//   5. Se almacenan los 9 instantes de cada pisada hasta detectar
+//      PISADAS_TOTALES (20 por defecto): se descartan las 2 primeras,
+//      las 2 ultimas, y las que se detectaron por TIMEOUT (no fiables)
+//   6. Al llegar a PISADAS_TOTALES se DETIENE el almacenamiento (LED fijo)
 //   7. La persona vuelve, el ordenador se reconecta y manda ENVIAR (0x02):
-//      se transmiten las 10 pisadas validas por BLE
+//      se transmiten las pisadas validas restantes por BLE
 //   8. Los angulos guardados son RELATIVOS a la posicion neutra
 //
 // Deteccion por giroscopio (metodo AVGS)
@@ -55,13 +56,22 @@
 #define UMBRAL_RUIDO     0.04f
 
 // Nº de pisadas a almacenar antes de parar. Se descartan las 2 primeras
-// (aceleracion) y las 2 ultimas (frenado) -> 14 - 4 = 10 validas.
-#define PISADAS_TOTALES  14
+// (aceleracion), las 2 ultimas (frenado) y las que se detectaron por TIMEOUT
+// (deteccion no fiable) -> con margen extra para que sigan sobrando
+// suficientes validas aunque se descarten algunas por TIMEOUT.
+#define PISADAS_TOTALES  20
 
 // --- Comandos que manda el ordenador por BLE ---
 #define CMD_CALIBRAR  0x01  // converge filtros + 5s quieto -> offsets
 #define CMD_INICIAR   0x03  // arranca la deteccion/almacenamiento (a correr)
 #define CMD_ENVIAR    0x02  // transmite las pisadas validas almacenadas
+
+// --- Marcador del paquete de diagnostico (por pisada, 11 bytes) ---
+// Se guarda con cada pisada capturada (buena o descartada) y se manda junto
+// con el resto de la sesion al reconectar tras la carrera -> permite ver
+// hueco/causa/pico/valle de una carrera real sin depender de llevar nada
+// conectado durante la carrera (ni cable ni movil).
+#define MARCADOR_DIAG 0xD1
 
 // --- Deteccion por giroscopio (metodo AVGS, eje Y unicamente) ---
 #define UMBRAL_MSW_DPS       190.0f // altura minima del pico de gy1 durante el vuelo
@@ -104,6 +114,13 @@ struct Pisada {
     Muestra instantes[NUM_INSTANTES]; //los 9 instantes
     uint8_t  numMuestras;
     uint16_t duracion_ms;
+    bool     porTimeout; // true = el despegue NO se detecto por inflexion real
+                         // (se salvo por el timeout de seguridad): deteccion
+                         // no fiable, se descarta al enviar
+    // --- Diagnostico (se manda para TODAS las pisadas, incluso descartadas) ---
+    float    diagPicoMSW;
+    float    diagGy1Min;
+    uint32_t diagHueco;
 };
 
 // ============================================================
@@ -126,7 +143,7 @@ enum EstadoApp {
     APP_IDLE,             // recien encendido / esperando comando de CALIBRAR
     APP_ESPERANDO_START,  // calibrado, filtros calientes, esperando comando de INICIAR
     APP_GRABANDO,         // detectando y almacenando pisadas (sin depender del BLE)
-    APP_COMPLETO          // 14 pisadas guardadas, esperando reconexion para ENVIAR
+    APP_COMPLETO          // PISADAS_TOTALES guardadas, esperando reconexion para ENVIAR
 };
 EstadoApp estadoApp = APP_IDLE;
 
@@ -150,6 +167,8 @@ float gy1Anterior = 0;
 bool     ascendiendoMSW  = false; // gy1 esta subiendo -> buscando el pico del vuelo
 bool     descendiendoApoyo = false; // gy1 esta bajando dentro del apoyo -> buscando el minimo
 float    gy1Min          = 0;     // minimo local de gy1 durante el apoyo (para detectar el despegue)
+float    mswPico         = 0;     // valor del ultimo pico de MSW detectado (diagnostico)
+uint32_t huecoPisada     = 0;     // ms desde que acabo la pisada anterior (diagnostico)
 
 // LIMITACION CONOCIDA (gimbal lock): roll/pitch/yaw son fiables mientras
 // pitch se mantenga lejos de +/-90 grados. Cuando el pie rota mucho en el
@@ -263,6 +282,34 @@ void seleccionarInstantes(Pisada& p) {
         if (idx >= p.numMuestras) idx = p.numMuestras - 1;
         p.instantes[i] = p.muestras[idx];
     }
+}
+
+// ============================================================
+// DIAGNOSTICO POR BLE (11 bytes) de una pisada ya almacenada.
+// Se manda junto con el resto de la sesion al reconectar tras la
+// carrera — no depende de llevar nada conectado durante la carrera,
+// funciona igual con o sin movil (y con cualquier movil, iOS incluido).
+// Formato: [0xD1][pisada][causa 0/1][duracion u16][picoMSW i16 x10]
+//          [gy1Min i16 x10][hueco u16]
+// NOTA: aqui se usa x10 (no x100 como en las muestras normales) porque
+// mswPico y gy1Min pueden superar 600 dps, y a escala x100 desbordarian
+// un int16 (max 327.67) dando valores absurdos/con signo invertido.
+// ============================================================
+void enviarDiagnosticoBLE(uint8_t idx) {
+    Pisada& p = sesion[idx];
+
+    uint8_t buf[11];
+    buf[0] = MARCADOR_DIAG;
+    buf[1] = idx + 1;
+    buf[2] = p.porTimeout ? 1 : 0;
+    memcpy(buf + 3, &p.duracion_ms, 2);
+    int16_t v;
+    v = (int16_t)constrain(p.diagPicoMSW * 10.0f, -32767, 32767); memcpy(buf + 5, &v, 2);
+    v = (int16_t)constrain(p.diagGy1Min  * 10.0f, -32767, 32767); memcpy(buf + 7, &v, 2);
+    uint16_t huecoAcotado = (p.diagHueco > 60000) ? 60000 : (uint16_t)p.diagHueco;
+    memcpy(buf + 9, &huecoAcotado, 2);
+
+    pisadaChar.writeValue(buf, 11);
 }
 
 void enviarPisadaBLE(uint8_t idx) {
@@ -447,19 +494,39 @@ void calibrarPosicionNeutra() {
 
 // ============================================================
 // ENVIO DE LA SESION ALMACENADA
-// Descarta 2 primeras + 2 ultimas y transmite las validas por BLE
+// Descarta 2 primeras + 2 ultimas (aceleracion/frenado) y ademas las
+// que se detectaron por TIMEOUT (deteccion no fiable, ver porTimeout).
+// Las "raras" pero detectadas por INFLEXION SI se envian: pueden ser
+// variabilidad real, no ruido, y eso se decide en el analisis, no aqui.
 // ============================================================
 void enviarSesionBLE() {
     uint8_t inicio = 2;
     uint8_t fin_idx = (numPisadas >= 2) ? (numPisadas - 2) : 0;
-    uint8_t pisadasValidas = (fin_idx > inicio) ? (fin_idx - inicio) : 0;
+
+    uint8_t pisadasValidas = 0;
+    uint8_t descartadasTimeout = 0;
+    for (uint8_t i = inicio; i < fin_idx; i++) {
+        if (sesion[i].porTimeout) descartadasTimeout++;
+        else pisadasValidas++;
+    }
 
     Serial.print("Total capturadas: "); Serial.println(numPisadas);
-    Serial.println("Descartadas: 2 primeras + 2 ultimas");
+    Serial.print("Descartadas: 2 primeras + 2 ultimas + ");
+    Serial.print(descartadasTimeout); Serial.println(" por TIMEOUT");
     Serial.print("Enviando "); Serial.print(pisadasValidas);
     Serial.println(" pisadas validas...");
 
+    // Diagnostico de TODAS las capturadas (incluidas las descartadas), para
+    // poder revisar hueco/causa/pico/valle de la sesion completa sin haber
+    // necesitado nada conectado durante la carrera
+    for (uint8_t i = 0; i < numPisadas; i++) {
+        enviarDiagnosticoBLE(i);
+        delay(BLE_DELAY_MS);
+    }
+    delay(BLE_DELAY_MS);
+
     for (uint8_t i = inicio; i < fin_idx; i++) {
+        if (sesion[i].porTimeout) continue; // deteccion no fiable, se descarta
         enviarPisadaBLE(i);
         mostrarPisadaSerial(i);
         delay(BLE_DELAY_MS);
@@ -516,6 +583,7 @@ void muestrear() {
                 if (ascendiendoMSW && gy1Anterior > UMBRAL_MSW_DPS
                     && (millis() - finPisadaMs) > BLOQUEO_MS) {
                     estado = ESPERANDO_IC;
+                    mswPico = gy1Anterior; // diagnostico: altura real del pico
                 }
                 ascendiendoMSW = false;
             }
@@ -533,8 +601,16 @@ void muestrear() {
                 resetEstado(estadoMeta);
                 descendiendoApoyo = false;
                 gy1Min = gy1;
+                huecoPisada = inicioPisada - finPisadaMs; // diagnostico
                 // IMPORTANTE: NO reiniciar Madgwick aqui, se perderia la calibracion
-                Serial.print("Pisada "); Serial.println(numPisadas + 1);
+                // Diagnostico: si el hueco desde la pisada anterior es muy corto
+                // (cerca de BLOQUEO_MS), sospechoso de ser la cola de esa misma
+                // pisada en vez de un paso nuevo de verdad
+                Serial.print("Pisada "); Serial.print(numPisadas + 1);
+                Serial.print(" | pico MSW="); Serial.print(mswPico);
+                Serial.print(" dps | hueco desde anterior=");
+                Serial.print(huecoPisada);
+                Serial.println("ms");
             }
             break;
 
@@ -579,19 +655,38 @@ void muestrear() {
                 if (duracion > DURACION_MINIMA_MS &&
                     (inflexionDespegue || duracion > DURACION_MAXIMA_MS)) {
 
+                    // Diagnostico: saber SI el despegue se detecto por inflexion real
+                    // de gy1 (fiable) o si tuvo que salvarse por el timeout de
+                    // seguridad (indicio de que el umbral no encaja con este ritmo),
+                    // y que tan profundo fue el valle antes de disparar (un valle muy
+                    // superficial es indicio de un despegue prematuro/falso)
+                    Serial.print("  -> fin pisada: duracion="); Serial.print(duracion);
+                    Serial.print("ms | causa=");
+                    Serial.print(inflexionDespegue ? "INFLEXION" : "TIMEOUT (revisar UMBRAL_DESPEGUE_DPS)");
+                    Serial.print(" | valle gy1Min="); Serial.print(gy1Min);
+                    Serial.println(" dps");
+
                     if (p.numMuestras >= NUM_INSTANTES) {
-                        p.duracion_ms = (uint16_t)duracion;
+                        p.duracion_ms  = (uint16_t)duracion;
+                        p.porTimeout   = !inflexionDespegue;
+                        // Guardar el diagnostico junto con la pisada: se manda
+                        // por BLE con el resto al reconectar (no hace falta
+                        // llevar nada conectado durante la carrera)
+                        p.diagPicoMSW  = mswPico;
+                        p.diagGy1Min   = gy1Min;
+                        p.diagHueco    = huecoPisada;
                         seleccionarInstantes(p);
                         numPisadas++;
                     }
                     estado = ESPERANDO_MSW;
                     finPisadaMs = millis();
 
-                    // ¿Ya tenemos las 14? -> parar de almacenar
+                    // ¿Ya tenemos el objetivo? -> parar de almacenar
                     if (numPisadas >= PISADAS_TOTALES) {
                         estadoApp = APP_COMPLETO;
                         Serial.println();
-                        Serial.println("14 pisadas almacenadas — vuelve al ordenador para descargar");
+                        Serial.print(PISADAS_TOTALES);
+                        Serial.println(" pisadas almacenadas — vuelve al ordenador para descargar");
                     }
                 }
             }
@@ -722,7 +817,8 @@ void loop() {
             numPisadas = 0;
             estado = ESPERANDO_MSW;
             estadoApp = APP_GRABANDO;
-            Serial.println("GRABANDO — corre. Para sola tras 14 pisadas.");
+            Serial.print("GRABANDO — corre. Para sola tras "); Serial.print(PISADAS_TOTALES);
+            Serial.println(" pisadas.");
         }
         // ENVIAR: transmite las pisadas validas almacenadas
         else if (cmd == CMD_ENVIAR && numPisadas > 0) {
