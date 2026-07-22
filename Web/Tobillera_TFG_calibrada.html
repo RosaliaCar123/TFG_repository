@@ -248,6 +248,127 @@
   /* ── Exportar ── */
   #btn-export { margin-top: 16px; }
 
+  /* ── Gráficas ── */
+  .viz-root {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 24px;
+  }
+  .viz-titulo {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .chart-controles {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .segmented {
+    display: flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 2px;
+  }
+  .seg-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--sans);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .seg-btn:hover { color: var(--text); }
+  .seg-btn.active { background: var(--accent2); color: #fff; }
+
+  .chart-wrap { position: relative; width: 100%; }
+  .chart-wrap svg { width: 100%; height: auto; display: block; }
+
+  .chart-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: var(--mono);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+    z-index: 10;
+    min-width: 150px;
+  }
+  .tt-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .tt-key { width: 14px; height: 2px; border-radius: 1px; display: inline-block; flex-shrink: 0; }
+  .tt-name { color: var(--muted); }
+  .tt-val { font-weight: 700; color: var(--text); margin-left: auto; padding-left: 12px; }
+
+  .chart-legend { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .legend-key { width: 16px; height: 2px; border-radius: 1px; display: inline-block; flex-shrink: 0; }
+
+  .chart-nota { font-size: 11px; color: var(--muted); margin-top: 12px; line-height: 1.5; }
+  .chart-nota .zona-valida { color: var(--accent); font-weight: 600; }
+
+  .avg-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    margin-left: 2px;
+  }
+  .avg-check input { accent-color: var(--accent2); cursor: pointer; }
+
+  .outliers-box {
+    display: none;
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: rgba(250,178,25,0.08);
+    border: 1px solid rgba(250,178,25,0.28);
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .outliers-title {
+    color: #fab219;
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .outlier-item {
+    color: var(--muted);
+    cursor: pointer;
+    text-decoration: underline dotted;
+    margin-right: 12px;
+    font-family: var(--mono);
+  }
+  .outlier-item:hover { color: var(--text); }
+
+  details.tabla-detalle { margin-top: 4px; }
+  details.tabla-detalle summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 8px 4px;
+    user-select: none;
+  }
+  details.tabla-detalle summary:hover { color: var(--accent2); }
+
   /* scrollbar */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -327,6 +448,50 @@
 
 <div id="tabs"><div class="tab">P1</div><div class="tab">P2</div><div class="tab">P3</div><div class="tab">P4</div><div class="tab active">P5</div></div>
 
+<!-- Gráfica de la pisada seleccionada -->
+<div class="viz-root" id="chart-card">
+  <div class="viz-titulo">📈 Pisada <span id="chart-titulo-pisada">—</span></div>
+  <div class="chart-controles">
+    <div class="segmented" id="sensor-toggle">
+      <button class="seg-btn active" data-sensor="1">Astrágalo</button>
+      <button class="seg-btn" data-sensor="2">Metatarsiano</button>
+    </div>
+    <div class="segmented" id="metrica-toggle">
+      <button class="seg-btn active" data-metrica="angulos">Ángulos (°)</button>
+      <button class="seg-btn" data-metrica="velocidad">Velocidad (m/s)</button>
+    </div>
+  </div>
+  <div class="chart-wrap">
+    <svg id="chart-svg" viewBox="0 0 640 320" preserveAspectRatio="xMidYMid meet"></svg>
+    <div id="chart-tooltip" class="chart-tooltip" style="display:none"></div>
+  </div>
+  <div class="chart-legend" id="chart-legend"></div>
+  <p class="chart-nota" id="chart-nota"></p>
+</div>
+
+<!-- Gráfica de medias de la sesión -->
+<div class="viz-root" id="avg-card">
+  <div class="viz-titulo">📊 Media de la sesión <span id="avg-conteo" style="font-weight:400;color:var(--muted);font-size:12px"></span></div>
+  <div class="chart-controles">
+    <div class="segmented" id="avg-sensor-toggle">
+      <button class="seg-btn active" data-sensor="1">Astrágalo</button>
+      <button class="seg-btn" data-sensor="2">Metatarsiano</button>
+    </div>
+    <div class="segmented" id="avg-metrica-toggle">
+      <button class="seg-btn active" data-metrica="angulos">Ángulos (°)</button>
+      <button class="seg-btn" data-metrica="velocidad">Velocidad (m/s)</button>
+    </div>
+    <label class="avg-check"><input type="checkbox" id="avg-show-individual"> Mostrar pisadas individuales</label>
+  </div>
+  <div class="chart-wrap">
+    <svg id="avg-svg" viewBox="0 0 640 320" preserveAspectRatio="xMidYMid meet"></svg>
+    <div id="avg-tooltip" class="chart-tooltip" style="display:none"></div>
+  </div>
+  <div class="chart-legend" id="avg-legend"></div>
+  <p class="chart-nota" id="avg-nota"></p>
+  <div class="outliers-box" id="avg-outliers"></div>
+</div>
+
 <div id="tabla-wrap">
   <div id="empty" style="display: none;">
     <div class="big">📡</div>
@@ -337,6 +502,8 @@
       <h2 id="tabla-titulo">Pisada 5</h2>
       <span class="duracion-badge" id="tabla-duracion">261 ms</span>
     </div>
+    <details class="tabla-detalle">
+    <summary>Ver tabla de datos numéricos</summary>
     <div style="overflow-x:auto">
     <table>
       <thead>
@@ -421,6 +588,7 @@
     </tr></tbody>
     </table>
     </div>
+    </details>
   </div>
 </div>
 
@@ -440,6 +608,23 @@ let pisadas = [];         // array de pisadas recibidas
 let pisadaActual = null;  // pisada que se está recibiendo
 let pisadaSeleccionada = 0;
 let diagnosticos = [];    // diagnostico en vivo por pisada (hueco/causa/pico/valle)
+
+// ── Gráfica de pisada individual ──
+// Paleta categórica validada (CVD-safe, 3 slots adyacentes, dark mode)
+const RANGO_VALIDO = { 1: [0, 35], 2: [35, 90] }; // % de referencia por sensor (astrágalo / metatarsiano)
+const SENSOR_NOMBRE = { 1: 'Astrágalo', 2: 'Metatarsiano' };
+const SERIES_ANGULO = [
+  { key: 'pitch', label: 'Pitch (sagital)',    color: '#3987e5' },
+  { key: 'roll',  label: 'Roll (frontal)',     color: '#199e70' },
+  { key: 'yaw',   label: 'Yaw (transversal)',  color: '#c98500' },
+];
+const SERIES_VEL = [
+  { key: 'velX', label: 'vX', color: '#3987e5' },
+  { key: 'velY', label: 'vY', color: '#199e70' },
+  { key: 'velZ', label: 'vZ', color: '#c98500' },
+];
+let chartSensor  = 1;         // 1 = astragalo, 2 = metatarsiano
+let chartMetrica = 'angulos'; // 'angulos' | 'velocidad'
 
 // ── Log ──
 function log(msg, tipo = '') {
@@ -588,6 +773,7 @@ function recibirDatos(event) {
     document.getElementById('btn-iniciar').disabled = false;
     document.getElementById('btn-export').disabled  = false;
     if (pisadas.length > 0) mostrarPisada(pisadas.length - 1);
+    renderMedias();
     return;
   }
 
@@ -682,6 +868,9 @@ function mostrarPisada(idx) {
     `;
     tbody.appendChild(tr);
   });
+
+  document.getElementById('chart-titulo-pisada').textContent = idx + 1;
+  renderChart(p);
 }
 
 // ── Actualizar tabs ──
@@ -696,6 +885,418 @@ function actualizarTabs() {
     cont.appendChild(b);
   });
 }
+
+// ════════════════════════════════════════════════════════════
+// GRÁFICA DE PISADA INDIVIDUAL (SVG, sin librerías externas)
+// ════════════════════════════════════════════════════════════
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// Extrae, para un sensor/métrica dados, los 9 valores de cada serie de una pisada
+function datosSerie(pisada, sensor, metrica) {
+  const sufijo = sensor === 1 ? '1' : '2';
+  const seriesDefs = metrica === 'angulos' ? SERIES_ANGULO : SERIES_VEL;
+  const campoBase  = metrica === 'angulos'
+    ? { pitch: 'pitch', roll: 'roll', yaw: 'yaw' }
+    : { velX: 'velX', velY: 'velY', velZ: 'velZ' };
+  return seriesDefs.map(s => ({
+    ...s,
+    valores: pisada.instantes.map(m => m[campoBase[s.key] + sufijo])
+  }));
+}
+
+// Atajo para la gráfica de pisada individual (usa el sensor/métrica activos)
+function datosParaChart(pisada) {
+  return datosSerie(pisada, chartSensor, chartMetrica);
+}
+
+function renderChart(pisada) {
+  const svg = document.getElementById('chart-svg');
+  svg.innerHTML = '';
+  if (!pisada) return;
+
+  const series = datosParaChart(pisada);
+  const W = 640, H = 320;
+  const M = { top: 16, right: 16, bottom: 34, left: 44 };
+  const plotW = W - M.left - M.right;
+  const plotH = H - M.top - M.bottom;
+
+  // Escala Y única compartida por las 3 series (nunca doble eje)
+  let allVals = [];
+  series.forEach(s => allVals.push(...s.valores));
+  let yMin = Math.min(...allVals), yMax = Math.max(...allVals);
+  const pad = (yMax - yMin) * 0.12 || 1;
+  yMin -= pad; yMax += pad;
+
+  const xScale = pct => M.left + (pct / 100) * plotW;
+  const yScale = v   => M.top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+  // Zona fuera del rango de referencia del sensor activo (sombreada)
+  const [validIni, validFin] = RANGO_VALIDO[chartSensor];
+  if (validIni > 0) {
+    svg.appendChild(svgEl('rect', {
+      x: xScale(0), y: M.top, width: xScale(validIni) - xScale(0), height: plotH,
+      fill: 'rgba(255,255,255,0.04)'
+    }));
+  }
+  if (validFin < 100) {
+    svg.appendChild(svgEl('rect', {
+      x: xScale(validFin), y: M.top, width: xScale(100) - xScale(validFin), height: plotH,
+      fill: 'rgba(255,255,255,0.04)'
+    }));
+  }
+
+  // Gridlines horizontales (hairline, recesivas) + etiquetas del eje Y
+  const NUM_TICKS_Y = 4;
+  for (let i = 0; i <= NUM_TICKS_Y; i++) {
+    const v = yMin + (yMax - yMin) * i / NUM_TICKS_Y;
+    const y = yScale(v);
+    svg.appendChild(svgEl('line', { x1: M.left, x2: W - M.right, y1: y, y2: y, stroke: '#2c2c2a', 'stroke-width': 1 }));
+    const t = svgEl('text', { x: M.left - 8, y: y + 4, 'text-anchor': 'end', fill: '#898781', 'font-size': 10 });
+    t.textContent = v.toFixed(0);
+    svg.appendChild(t);
+  }
+
+  // Eje X (línea base) + ticks en los % reales de cada instante
+  svg.appendChild(svgEl('line', { x1: M.left, x2: W - M.right, y1: M.top + plotH, y2: M.top + plotH, stroke: '#383835', 'stroke-width': 1 }));
+  INSTANTES.forEach(pct => {
+    const x = xScale(pct);
+    const t = svgEl('text', { x, y: H - M.bottom + 18, 'text-anchor': 'middle', fill: '#898781', 'font-size': 10 });
+    t.textContent = pct + '%';
+    svg.appendChild(t);
+  });
+
+  // Líneas (2px, extremos redondeados) + marcadores (r=4, anillo de superficie)
+  series.forEach(s => {
+    let d = '';
+    INSTANTES.forEach((pct, i) => {
+      const x = xScale(pct), y = yScale(s.valores[i]);
+      d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    });
+    svg.appendChild(svgEl('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    INSTANTES.forEach((pct, i) => {
+      const x = xScale(pct), y = yScale(s.valores[i]);
+      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: 4, fill: s.color, stroke: '#1a1a19', 'stroke-width': 2 }));
+    });
+  });
+
+  // Crosshair (oculto hasta hover)
+  const crosshair = svgEl('line', { x1: M.left, x2: M.left, y1: M.top, y2: M.top + plotH, stroke: '#c3c2b7', 'stroke-width': 1, opacity: 0 });
+  svg.appendChild(crosshair);
+
+  // Capa de interacción (todo el área de trazado es zona de hover)
+  const hitRect = svgEl('rect', { x: M.left, y: M.top, width: plotW, height: plotH, fill: 'transparent', style: 'cursor:crosshair' });
+  svg.appendChild(hitRect);
+
+  const tooltip = document.getElementById('chart-tooltip');
+  hitRect.addEventListener('pointermove', (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const localX = (ev.clientX - rect.left) * (W / rect.width);
+    let nearest = 0, best = Infinity;
+    INSTANTES.forEach((pct, i) => {
+      const dist = Math.abs(xScale(pct) - localX);
+      if (dist < best) { best = dist; nearest = i; }
+    });
+    const px = xScale(INSTANTES[nearest]);
+    crosshair.setAttribute('x1', px); crosshair.setAttribute('x2', px);
+    crosshair.setAttribute('opacity', 1);
+
+    tooltip.innerHTML = '';
+    const title = document.createElement('div');
+    title.style.color = 'var(--muted)';
+    title.textContent = `${INSTANTES[nearest]}% · t=${pisada.instantes[nearest].t_ms}ms`;
+    tooltip.appendChild(title);
+    series.forEach(s => {
+      const row = document.createElement('div'); row.className = 'tt-row';
+      const key = document.createElement('span'); key.className = 'tt-key'; key.style.background = s.color;
+      const name = document.createElement('span'); name.className = 'tt-name'; name.textContent = s.label;
+      const val = document.createElement('span'); val.className = 'tt-val'; val.textContent = s.valores[nearest].toFixed(2);
+      row.appendChild(key); row.appendChild(name); row.appendChild(val);
+      tooltip.appendChild(row);
+    });
+    tooltip.style.display = 'block';
+    tooltip.style.left = Math.min(ev.clientX - rect.left + 12, rect.width - 160) + 'px';
+    tooltip.style.top  = Math.max(ev.clientY - rect.top - 70, 0) + 'px';
+  });
+  hitRect.addEventListener('pointerleave', () => {
+    tooltip.style.display = 'none';
+    crosshair.setAttribute('opacity', 0);
+  });
+
+  // Leyenda (line-key + nombre, texto en tinta de texto, nunca en el color de la serie)
+  const legend = document.getElementById('chart-legend');
+  legend.innerHTML = '';
+  series.forEach(s => {
+    const item = document.createElement('div'); item.className = 'legend-item';
+    const key = document.createElement('span'); key.className = 'legend-key'; key.style.background = s.color;
+    const txt = document.createElement('span'); txt.textContent = s.label;
+    item.appendChild(key); item.appendChild(txt);
+    legend.appendChild(item);
+  });
+
+  // Nota del rango de referencia
+  document.getElementById('chart-nota').innerHTML =
+    `Rango de referencia para <strong>${SENSOR_NOMBRE[chartSensor]}</strong>: ` +
+    `<span class="zona-valida">${validIni}%–${validFin}%</span> del apoyo — ` +
+    `la zona sombreada queda fuera de ese rango.`;
+}
+
+// ── Selectores de sensor / métrica ──
+document.getElementById('sensor-toggle').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.seg-btn');
+  if (!btn) return;
+  chartSensor = Number(btn.dataset.sensor);
+  document.querySelectorAll('#sensor-toggle .seg-btn').forEach(b => b.classList.toggle('active', b === btn));
+  if (pisadas[pisadaSeleccionada]) renderChart(pisadas[pisadaSeleccionada]);
+});
+document.getElementById('metrica-toggle').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.seg-btn');
+  if (!btn) return;
+  chartMetrica = btn.dataset.metrica;
+  document.querySelectorAll('#metrica-toggle .seg-btn').forEach(b => b.classList.toggle('active', b === btn));
+  if (pisadas[pisadaSeleccionada]) renderChart(pisadas[pisadaSeleccionada]);
+});
+
+// ════════════════════════════════════════════════════════════
+// GRÁFICA DE MEDIAS DE LA SESIÓN (media ± 1 SD + pisadas individuales + outliers)
+// ════════════════════════════════════════════════════════════
+let avgSensor = 1;
+let avgMetrica = 'angulos';
+let avgMostrarIndividual = false;
+
+// Media, SD por instante, y puntuación de desviación (RMS combinando las 3
+// series) por pisada. Se marca "outlier" la que se aleje > 1.5x la
+// desviación media del grupo (con al menos 4 pisadas, para no señalar ruido
+// en muestras muy pequeñas).
+function calcularEstadisticas(sensor, metrica) {
+  const seriesDefs = metrica === 'angulos' ? SERIES_ANGULO : SERIES_VEL;
+  const porPisada = pisadas.map(p => datosSerie(p, sensor, metrica));
+  const n = pisadas.length;
+
+  const stats = seriesDefs.map((s, si) => {
+    const mean = [], sd = [];
+    for (let i = 0; i < NUM_INSTANTES; i++) {
+      const vals = porPisada.map(serie => serie[si].valores[i]);
+      const m = vals.reduce((a, b) => a + b, 0) / (n || 1);
+      const varr = vals.reduce((a, b) => a + (b - m) * (b - m), 0) / (n || 1);
+      mean.push(m); sd.push(Math.sqrt(varr));
+    }
+    return { ...s, mean, sd };
+  });
+
+  const scores = porPisada.map(serie => {
+    let sumSq = 0, count = 0;
+    serie.forEach((s, si) => {
+      s.valores.forEach((v, i) => { const d = v - stats[si].mean[i]; sumSq += d * d; count++; });
+    });
+    return Math.sqrt(sumSq / (count || 1));
+  });
+  const avgScore = scores.reduce((a, b) => a + b, 0) / (n || 1);
+  const umbral = avgScore * 1.5;
+  const outliers = scores
+    .map((sc, i) => ({ idx: i, score: sc, esOutlier: n >= 4 && sc > umbral }))
+    .filter(o => o.esOutlier);
+
+  return { stats, porPisada, outliers, n };
+}
+
+function renderMedias() {
+  const svg = document.getElementById('avg-svg');
+  svg.innerHTML = '';
+  document.getElementById('avg-conteo').textContent = pisadas.length ? `(${pisadas.length} pisadas)` : '';
+  if (pisadas.length === 0) {
+    document.getElementById('avg-outliers').style.display = 'none';
+    return;
+  }
+
+  const { stats, porPisada, outliers, n } = calcularEstadisticas(avgSensor, avgMetrica);
+
+  const W = 640, H = 320;
+  const M = { top: 16, right: 16, bottom: 34, left: 44 };
+  const plotW = W - M.left - M.right;
+  const plotH = H - M.top - M.bottom;
+
+  let allVals = [];
+  stats.forEach(s => s.mean.forEach((m, i) => { allVals.push(m + s.sd[i], m - s.sd[i]); }));
+  if (avgMostrarIndividual) porPisada.forEach(serie => serie.forEach(s => allVals.push(...s.valores)));
+  let yMin = Math.min(...allVals), yMax = Math.max(...allVals);
+  const pad = (yMax - yMin) * 0.12 || 1;
+  yMin -= pad; yMax += pad;
+
+  const xScale = pct => M.left + (pct / 100) * plotW;
+  const yScale = v   => M.top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+
+  // Zona fuera del rango de referencia (igual que en la gráfica individual)
+  const [validIni, validFin] = RANGO_VALIDO[avgSensor];
+  if (validIni > 0) {
+    svg.appendChild(svgEl('rect', { x: xScale(0), y: M.top, width: xScale(validIni) - xScale(0), height: plotH, fill: 'rgba(255,255,255,0.04)' }));
+  }
+  if (validFin < 100) {
+    svg.appendChild(svgEl('rect', { x: xScale(validFin), y: M.top, width: xScale(100) - xScale(validFin), height: plotH, fill: 'rgba(255,255,255,0.04)' }));
+  }
+
+  // Gridlines Y
+  for (let i = 0; i <= 4; i++) {
+    const v = yMin + (yMax - yMin) * i / 4, y = yScale(v);
+    svg.appendChild(svgEl('line', { x1: M.left, x2: W - M.right, y1: y, y2: y, stroke: '#2c2c2a', 'stroke-width': 1 }));
+    const t = svgEl('text', { x: M.left - 8, y: y + 4, 'text-anchor': 'end', fill: '#898781', 'font-size': 10 });
+    t.textContent = v.toFixed(0);
+    svg.appendChild(t);
+  }
+  svg.appendChild(svgEl('line', { x1: M.left, x2: W - M.right, y1: M.top + plotH, y2: M.top + plotH, stroke: '#383835', 'stroke-width': 1 }));
+  INSTANTES.forEach(pct => {
+    const x = xScale(pct);
+    const t = svgEl('text', { x, y: H - M.bottom + 18, 'text-anchor': 'middle', fill: '#898781', 'font-size': 10 });
+    t.textContent = pct + '%';
+    svg.appendChild(t);
+  });
+
+  // Pisadas individuales (finas, atenuadas), debajo de la media — muestra la
+  // variabilidad real, no solo el resumen estadístico. Las outliers se pintan
+  // en el color de aviso, más visibles que el resto.
+  if (avgMostrarIndividual) {
+    porPisada.forEach((serie, pi) => {
+      const esOutlier = outliers.some(o => o.idx === pi);
+      serie.forEach(s => {
+        let d = '';
+        INSTANTES.forEach((pct, i) => {
+          const x = xScale(pct), y = yScale(s.valores[i]);
+          d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+        });
+        svg.appendChild(svgEl('path', {
+          d, fill: 'none',
+          stroke: esOutlier ? '#fab219' : s.color,
+          'stroke-width': esOutlier ? 1.5 : 1,
+          opacity: esOutlier ? 0.65 : 0.16,
+          'stroke-linecap': 'round'
+        }));
+      });
+    });
+  }
+
+  // Banda ±1 SD (relleno 10%) + línea media (2px) por serie
+  stats.forEach(s => {
+    let dArea = '';
+    INSTANTES.forEach((pct, i) => {
+      const x = xScale(pct), y = yScale(s.mean[i] + s.sd[i]);
+      dArea += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    });
+    for (let i = NUM_INSTANTES - 1; i >= 0; i--) {
+      const x = xScale(INSTANTES[i]), y = yScale(s.mean[i] - s.sd[i]);
+      dArea += 'L' + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    }
+    dArea += 'Z';
+    svg.appendChild(svgEl('path', { d: dArea, fill: s.color, opacity: 0.10, stroke: 'none' }));
+
+    let dMean = '';
+    INSTANTES.forEach((pct, i) => {
+      const x = xScale(pct), y = yScale(s.mean[i]);
+      dMean += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    });
+    svg.appendChild(svgEl('path', { d: dMean, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    INSTANTES.forEach((pct, i) => {
+      const x = xScale(pct), y = yScale(s.mean[i]);
+      svg.appendChild(svgEl('circle', { cx: x, cy: y, r: 4, fill: s.color, stroke: '#1a1a19', 'stroke-width': 2 }));
+    });
+  });
+
+  // Crosshair + tooltip (media ± SD de cada serie en el instante más cercano)
+  const crosshair = svgEl('line', { x1: M.left, x2: M.left, y1: M.top, y2: M.top + plotH, stroke: '#c3c2b7', 'stroke-width': 1, opacity: 0 });
+  svg.appendChild(crosshair);
+  const hitRect = svgEl('rect', { x: M.left, y: M.top, width: plotW, height: plotH, fill: 'transparent', style: 'cursor:crosshair' });
+  svg.appendChild(hitRect);
+
+  const tooltip = document.getElementById('avg-tooltip');
+  hitRect.addEventListener('pointermove', (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const localX = (ev.clientX - rect.left) * (W / rect.width);
+    let nearest = 0, best = Infinity;
+    INSTANTES.forEach((pct, i) => { const dist = Math.abs(xScale(pct) - localX); if (dist < best) { best = dist; nearest = i; } });
+    const px = xScale(INSTANTES[nearest]);
+    crosshair.setAttribute('x1', px); crosshair.setAttribute('x2', px);
+    crosshair.setAttribute('opacity', 1);
+
+    tooltip.innerHTML = '';
+    const title = document.createElement('div');
+    title.style.color = 'var(--muted)';
+    title.textContent = `${INSTANTES[nearest]}%`;
+    tooltip.appendChild(title);
+    stats.forEach(s => {
+      const row = document.createElement('div'); row.className = 'tt-row';
+      const key = document.createElement('span'); key.className = 'tt-key'; key.style.background = s.color;
+      const name = document.createElement('span'); name.className = 'tt-name'; name.textContent = s.label;
+      const val = document.createElement('span'); val.className = 'tt-val'; val.textContent = `${s.mean[nearest].toFixed(2)} ± ${s.sd[nearest].toFixed(2)}`;
+      row.appendChild(key); row.appendChild(name); row.appendChild(val);
+      tooltip.appendChild(row);
+    });
+    tooltip.style.display = 'block';
+    tooltip.style.left = Math.min(ev.clientX - rect.left + 12, rect.width - 170) + 'px';
+    tooltip.style.top  = Math.max(ev.clientY - rect.top - 70, 0) + 'px';
+  });
+  hitRect.addEventListener('pointerleave', () => { tooltip.style.display = 'none'; crosshair.setAttribute('opacity', 0); });
+
+  // Leyenda
+  const legend = document.getElementById('avg-legend');
+  legend.innerHTML = '';
+  stats.forEach(s => {
+    const item = document.createElement('div'); item.className = 'legend-item';
+    const key = document.createElement('span'); key.className = 'legend-key'; key.style.background = s.color;
+    const txt = document.createElement('span'); txt.textContent = s.label + ' (media ± 1 SD)';
+    item.appendChild(key); item.appendChild(txt); legend.appendChild(item);
+  });
+  if (avgMostrarIndividual) {
+    const item = document.createElement('div'); item.className = 'legend-item';
+    const key = document.createElement('span'); key.className = 'legend-key'; key.style.background = '#898781'; key.style.opacity = 0.5;
+    const txt = document.createElement('span'); txt.textContent = 'Pisadas individuales';
+    item.appendChild(key); item.appendChild(txt); legend.appendChild(item);
+  }
+
+  document.getElementById('avg-nota').innerHTML =
+    `Rango de referencia para <strong>${SENSOR_NOMBRE[avgSensor]}</strong>: ` +
+    `<span class="zona-valida">${validIni}%–${validFin}%</span> del apoyo — media calculada sobre ${n} pisada${n === 1 ? '' : 's'}.`;
+
+  // Aviso de pisadas que se desvían notablemente de la media
+  const box = document.getElementById('avg-outliers');
+  if (outliers.length > 0) {
+    box.style.display = 'block';
+    box.innerHTML = '';
+    const title = document.createElement('div'); title.className = 'outliers-title';
+    title.textContent = `⚠ ${outliers.length} pisada${outliers.length > 1 ? 's se desvían' : ' se desvía'} notablemente de la media:`;
+    box.appendChild(title);
+    outliers.sort((a, b) => b.score - a.score).forEach(o => {
+      const span = document.createElement('span'); span.className = 'outlier-item';
+      span.textContent = `Pisada ${o.idx + 1}`;
+      span.addEventListener('click', () => mostrarPisada(o.idx));
+      box.appendChild(span);
+    });
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+// ── Selectores de la gráfica de medias ──
+document.getElementById('avg-sensor-toggle').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.seg-btn');
+  if (!btn) return;
+  avgSensor = Number(btn.dataset.sensor);
+  document.querySelectorAll('#avg-sensor-toggle .seg-btn').forEach(b => b.classList.toggle('active', b === btn));
+  renderMedias();
+});
+document.getElementById('avg-metrica-toggle').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.seg-btn');
+  if (!btn) return;
+  avgMetrica = btn.dataset.metrica;
+  document.querySelectorAll('#avg-metrica-toggle .seg-btn').forEach(b => b.classList.toggle('active', b === btn));
+  renderMedias();
+});
+document.getElementById('avg-show-individual').addEventListener('change', (ev) => {
+  avgMostrarIndividual = ev.target.checked;
+  renderMedias();
+});
 
 // ── Exportar CSV ──
 document.getElementById('btn-export').addEventListener('click', () => {
