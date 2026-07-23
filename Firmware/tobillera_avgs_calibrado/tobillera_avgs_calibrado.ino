@@ -90,7 +90,7 @@
 #define UMBRAL_ACEL_MAX_G  1.3f
 
 // --- Envio BLE ---
-#define BLE_DELAY_MS 70 // margen entre notificaciones para que el central no pierda paquetes
+#define BLE_DELAY_MS 100 // margen entre notificaciones para que el central no pierda paquetes
 
 // --- Calibracion estatica ---
 #define TIEMPO_CALIBRACION_MS   5000    // 5 segundos quieto
