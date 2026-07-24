@@ -48,10 +48,8 @@
 // ============================================================
 // CONFIGURACION
 // ============================================================
-#define FREQ_HZ          100
-#define INTERVALO_US     10000
-#define MAX_PISADAS      50
-#define MAX_MUESTRAS     30
+#define FREQ_HZ          200
+#define INTERVALO_US     5000
 #define NUM_INSTANTES    9
 #define UMBRAL_RUIDO     0.04f
 
@@ -60,6 +58,20 @@
 // (deteccion no fiable) -> con margen extra para que sigan sobrando
 // suficientes validas aunque se descarten algunas por TIMEOUT.
 #define PISADAS_TOTALES  20
+
+// El array de pisadas nunca necesita ser mayor que PISADAS_TOTALES (la
+// grabacion se para en cuanto se alcanza ese numero) -> +2 de margen de
+// seguridad para el chequeo defensivo de numPisadas < MAX_PISADAS.
+#define MAX_PISADAS      (PISADAS_TOTALES + 2)
+
+// A 200Hz, para cubrir toda la duracion maxima de una pisada
+// (DURACION_MAXIMA_MS = 500ms) hacen falta 100 muestras -> margen hasta 110.
+#define MAX_MUESTRAS     110
+
+// Radio de la ventana (en muestras a cada lado) que se promedia al elegir
+// cada uno de los 9 instantes de interes, en vez de coger solo la muestra
+// mas cercana al %: a 200Hz, +-2 muestras = +-10ms de suavizado.
+#define VENTANA_INSTANTE 2
 
 // --- Comandos que manda el ordenador por BLE ---
 #define CMD_CALIBRAR  0x01  // converge filtros + 5s quieto -> offsets
@@ -90,11 +102,11 @@
 #define UMBRAL_ACEL_MAX_G  1.3f
 
 // --- Envio BLE ---
-#define BLE_DELAY_MS 100 // margen entre notificaciones para que el central no pierda paquetes
+#define BLE_DELAY_MS 120 // margen entre notificaciones para que el central no pierda paquetes
 
 // --- Calibracion estatica ---
 #define TIEMPO_CALIBRACION_MS   5000    // 5 segundos quieto
-#define MUESTRAS_CALIBRACION    500     // 500 muestras a 100Hz = 5s
+#define MUESTRAS_CALIBRACION    500     // ritmo fijo de 10ms/muestra (no depende de FREQ_HZ) -> 500 muestras = 5s
 
 const float INSTANTES[NUM_INSTANTES] = {0, 10, 20, 27, 35, 67, 92, 98, 100}; //instantes de interes 
 
@@ -110,7 +122,7 @@ struct Muestra {
 };
 
 struct Pisada {
-    Muestra muestras[MAX_MUESTRAS]; //a 100hz
+    Muestra muestras[MAX_MUESTRAS]; //a 200hz
     Muestra instantes[NUM_INSTANTES]; //los 9 instantes
     uint8_t  numMuestras;
     uint16_t duracion_ms;
@@ -135,7 +147,7 @@ Madgwick filtroMeta;
 Pisada   sesion[MAX_PISADAS];
 uint8_t  numPisadas   = 0;
 bool     calibrado    = false;
-uint32_t ultimaMuestra = 0; // reloj del muestreo a 100Hz (global: el loop ya no es bloqueante)
+uint32_t ultimaMuestra = 0; // reloj del muestreo a FREQ_HZ (global: el loop ya no es bloqueante)
 
 // --- Maquina de estados de la aplicacion (nivel superior) ---
 // Independiente del BLE: la deteccion sigue aunque se pierda la conexion.
@@ -274,13 +286,68 @@ void actualizarEstado(EstadoIMU& e, Madgwick& filtro,
 inline int16_t toInt16Vel(float v) { return (int16_t)constrain(v * 100.0f, -32767, 32767); }
 inline int16_t toInt16Ang(float a) { return (int16_t)constrain(a * 100.0f, -32767, 32767); }
 
+// Media circular de un conjunto de angulos (grados). Promediar angulos con
+// una media normal falla cerca de la frontera +-180: p.ej. 179 y -179 estan
+// a solo 2 grados de distancia real, pero una media aritmetica a lo bruto
+// da 0 (el lado opuesto). Pasando por seno/coseno se evita ese salto falso.
+float mediaCircular(const float* valoresGrados, int n) {
+    float sumSin = 0, sumCos = 0;
+    for (int i = 0; i < n; i++) {
+        float rad = valoresGrados[i] * PI / 180.0f;
+        sumSin += sin(rad);
+        sumCos += cos(rad);
+    }
+    return atan2(sumSin, sumCos) * 180.0f / PI;
+}
+
+// Para cada uno de los 9 instantes de interes, en vez de coger solo la
+// muestra mas cercana al %, se promedia una pequeña ventana de muestras
+// alrededor (+-VENTANA_INSTANTE) para suavizar el ruido de una unica
+// lectura puntual. Las velocidades se promedian de forma normal; los
+// angulos (roll/pitch/yaw) necesitan media circular (ver mediaCircular).
 void seleccionarInstantes(Pisada& p) {
+    const int ANCHO = 2 * VENTANA_INSTANTE + 1;
     for (uint8_t i = 0; i < NUM_INSTANTES; i++) {
-        uint8_t idx = (uint8_t)round(
-            INSTANTES[i] / 100.0f * (p.numMuestras - 1)
-        );
-        if (idx >= p.numMuestras) idx = p.numMuestras - 1;
-        p.instantes[i] = p.muestras[idx];
+        int idxCentral = (int)round(INSTANTES[i] / 100.0f * (p.numMuestras - 1));
+        if (idxCentral >= p.numMuestras) idxCentral = p.numMuestras - 1;
+        if (idxCentral < 0) idxCentral = 0;
+
+        int idxIni = idxCentral - VENTANA_INSTANTE;
+        int idxFin = idxCentral + VENTANA_INSTANTE;
+        if (idxIni < 0) idxIni = 0;
+        if (idxFin >= p.numMuestras) idxFin = p.numMuestras - 1;
+        int n = idxFin - idxIni + 1;
+
+        int32_t sVelX1=0, sVelY1=0, sVelZ1=0, sVelX2=0, sVelY2=0, sVelZ2=0;
+        int32_t sT = 0;
+        float rollAst[ANCHO], pitchAst[ANCHO], yawAst[ANCHO];
+        float rollMeta[ANCHO], pitchMeta[ANCHO], yawMeta[ANCHO];
+
+        int k = 0;
+        for (int j = idxIni; j <= idxFin; j++, k++) {
+            Muestra& m = p.muestras[j];
+            sVelX1 += m.velX1; sVelY1 += m.velY1; sVelZ1 += m.velZ1;
+            sVelX2 += m.velX2; sVelY2 += m.velY2; sVelZ2 += m.velZ2;
+            sT += m.t_ms;
+            rollAst[k]  = m.posX1 / 100.0f;
+            pitchAst[k] = m.posY1 / 100.0f;
+            yawAst[k]   = m.posZ1 / 100.0f;
+            rollMeta[k]  = m.posX2 / 100.0f;
+            pitchMeta[k] = m.posY2 / 100.0f;
+            yawMeta[k]   = m.posZ2 / 100.0f;
+        }
+
+        Muestra& out = p.instantes[i];
+        out.velX1 = (int16_t)(sVelX1 / n); out.velY1 = (int16_t)(sVelY1 / n); out.velZ1 = (int16_t)(sVelZ1 / n);
+        out.velX2 = (int16_t)(sVelX2 / n); out.velY2 = (int16_t)(sVelY2 / n); out.velZ2 = (int16_t)(sVelZ2 / n);
+        out.t_ms  = (uint16_t)(sT / n);
+
+        out.posX1 = toInt16Ang(mediaCircular(rollAst, n));
+        out.posY1 = toInt16Ang(mediaCircular(pitchAst, n));
+        out.posZ1 = toInt16Ang(mediaCircular(yawAst, n));
+        out.posX2 = toInt16Ang(mediaCircular(rollMeta, n));
+        out.posY2 = toInt16Ang(mediaCircular(pitchMeta, n));
+        out.posZ2 = toInt16Ang(mediaCircular(yawMeta, n));
     }
 }
 
@@ -539,7 +606,7 @@ void enviarSesionBLE() {
 }
 
 // ============================================================
-// MUESTREO 100Hz + DETECCION AVGS
+// MUESTREO A FREQ_HZ + DETECCION AVGS
 // Se llama fuera del bucle de conexion: la deteccion sigue aunque
 // se pierda el BLE. Si no estamos grabando, solo mantiene los
 // filtros Madgwick calientes para no perder la referencia.
@@ -828,7 +895,7 @@ void loop() {
         }
     }
 
-    // --- Muestreo 100Hz + deteccion (independiente del BLE) ---
+    // --- Muestreo a FREQ_HZ + deteccion (independiente del BLE) ---
     // Se muestrea tambien en ESPERANDO_START para mantener los filtros
     // Madgwick calientes hasta que llegue la señal de inicio.
     if (estadoApp == APP_ESPERANDO_START || estadoApp == APP_GRABANDO) {

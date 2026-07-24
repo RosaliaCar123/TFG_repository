@@ -333,6 +333,45 @@
   }
   .avg-check input { accent-color: var(--accent2); cursor: pointer; }
 
+  .series-toggle {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px 6px;
+  }
+  .series-check {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 6px;
+    transition: background 0.15s;
+    user-select: none;
+  }
+  .series-check:hover { background: rgba(255,255,255,0.04); }
+  .series-check input { display: none; }
+  .series-check .series-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: opacity 0.15s;
+  }
+  .series-check.off { color: var(--muted); }
+  .series-check.off .series-dot { opacity: 0.25; }
+
+  .chart-empty {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
   .outliers-box {
     display: none;
     margin-top: 14px;
@@ -481,6 +520,7 @@
       <button class="seg-btn active" data-metrica="angulos">Ángulos (°)</button>
       <button class="seg-btn" data-metrica="velocidad">Velocidad (m/s)</button>
     </div>
+    <div class="series-toggle" id="avg-series-toggle"></div>
     <label class="avg-check"><input type="checkbox" id="avg-show-individual"> Mostrar pisadas individuales</label>
   </div>
   <div class="chart-wrap">
@@ -1067,14 +1107,51 @@ document.getElementById('metrica-toggle').addEventListener('click', (ev) => {
 let avgSensor = 1;
 let avgMetrica = 'angulos';
 let avgMostrarIndividual = false;
+// Qué ejes/planos se muestran en la gráfica de medias (independiente por métrica)
+let avgVisibleAngulo = { pitch: true, roll: true, yaw: true };
+let avgVisibleVel    = { velX: true, velY: true, velZ: true };
 
-// Media, SD por instante, y puntuación de desviación (RMS combinando las 3
-// series) por pisada. Se marca "outlier" la que se aleje > 1.5x la
+function visibilidadActual(metrica) {
+  return metrica === 'angulos' ? avgVisibleAngulo : avgVisibleVel;
+}
+
+// Construye las casillas de eje para la métrica activa (se reconstruyen en
+// cada render para reflejar siempre el estado actual sin lógica adicional)
+function actualizarSeriesToggle() {
+  const todasSeries = avgMetrica === 'angulos' ? SERIES_ANGULO : SERIES_VEL;
+  const visMap = visibilidadActual(avgMetrica);
+  const cont = document.getElementById('avg-series-toggle');
+  cont.innerHTML = '';
+  todasSeries.forEach(s => {
+    const label = document.createElement('label');
+    label.className = 'series-check' + (visMap[s.key] ? '' : ' off');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = visMap[s.key];
+    input.addEventListener('change', () => {
+      visMap[s.key] = input.checked;
+      renderMedias();
+    });
+    const dot = document.createElement('span');
+    dot.className = 'series-dot';
+    dot.style.background = s.color;
+    const txt = document.createElement('span');
+    txt.textContent = s.label;
+    label.appendChild(input);
+    label.appendChild(dot);
+    label.appendChild(txt);
+    cont.appendChild(label);
+  });
+}
+
+// Media, SD por instante, y puntuación de desviación (RMS combinando las
+// series visibles) por pisada. Se marca "outlier" la que se aleje > 1.5x la
 // desviación media del grupo (con al menos 4 pisadas, para no señalar ruido
 // en muestras muy pequeñas).
 function calcularEstadisticas(sensor, metrica) {
-  const seriesDefs = metrica === 'angulos' ? SERIES_ANGULO : SERIES_VEL;
-  const porPisada = pisadas.map(p => datosSerie(p, sensor, metrica));
+  const visMap = visibilidadActual(metrica);
+  const seriesDefs = (metrica === 'angulos' ? SERIES_ANGULO : SERIES_VEL).filter(s => visMap[s.key]);
+  const porPisada = pisadas.map(p => datosSerie(p, sensor, metrica).filter(s => visMap[s.key]));
   const n = pisadas.length;
 
   const stats = seriesDefs.map((s, si) => {
@@ -1105,6 +1182,8 @@ function calcularEstadisticas(sensor, metrica) {
 }
 
 function renderMedias() {
+  actualizarSeriesToggle();
+
   const svg = document.getElementById('avg-svg');
   svg.innerHTML = '';
   document.getElementById('avg-conteo').textContent = pisadas.length ? `(${pisadas.length} pisadas)` : '';
@@ -1114,6 +1193,16 @@ function renderMedias() {
   }
 
   const { stats, porPisada, outliers, n } = calcularEstadisticas(avgSensor, avgMetrica);
+
+  if (stats.length === 0) {
+    document.getElementById('avg-legend').innerHTML = '';
+    document.getElementById('avg-nota').textContent = '';
+    document.getElementById('avg-outliers').style.display = 'none';
+    const t = svgEl('text', { x: 320, y: 160, 'text-anchor': 'middle', fill: '#898781', 'font-size': 13 });
+    t.textContent = 'Selecciona al menos un eje para ver la gráfica';
+    svg.appendChild(t);
+    return;
+  }
 
   const W = 640, H = 320;
   const M = { top: 16, right: 16, bottom: 34, left: 44 };
