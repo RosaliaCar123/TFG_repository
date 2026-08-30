@@ -71,7 +71,7 @@
 // Radio de la ventana (en muestras a cada lado) que se promedia al elegir
 // cada uno de los 9 instantes de interes, en vez de coger solo la muestra
 // mas cercana al %: a 200Hz, +-2 muestras = +-10ms de suavizado.
-#define VENTANA_INSTANTE 2
+#define VENTANA_INSTANTE 0
 
 // --- Comandos que manda el ordenador por BLE ---
 #define CMD_CALIBRAR  0x01  // converge filtros + 5s quieto -> offsets
