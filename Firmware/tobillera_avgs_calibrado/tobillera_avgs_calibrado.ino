@@ -48,8 +48,8 @@
 // ============================================================
 // CONFIGURACION
 // ============================================================
-#define FREQ_HZ          200
-#define INTERVALO_US     5000
+#define FREQ_HZ          100
+#define INTERVALO_US     10000
 #define NUM_INSTANTES    9
 #define UMBRAL_RUIDO     0.04f
 
